@@ -1,0 +1,22 @@
+{
+  "name": "sentinel-api-remediation",
+  "url": "https://sentinel.example.com",
+  "hook_attributes": { "url": "https://sentinel.example.com/webhooks/github" },
+  "redirect_url": "https://sentinel.example.com/github/callback",
+  "public": false,
+  "default_permissions": {
+    "contents": "write",
+    "metadata": "read",
+    "pull_requests": "write",
+    "issues": "write",
+    "checks": "read",
+    "statuses": "read"
+  },
+  "default_events": [
+    "installation",
+    "installation_repositories",
+    "push",
+    "pull_request",
+    "repository"
+  ]
+}
