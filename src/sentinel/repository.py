@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
 
-
 SUPPORTED_EXTENSIONS = {
     ".js": "javascript",
     ".jsx": "javascript",
