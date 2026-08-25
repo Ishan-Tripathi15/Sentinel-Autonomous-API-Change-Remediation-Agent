@@ -3,7 +3,6 @@ import hmac
 import json
 
 import pytest
-
 from sentinel.github_app import (
     WebhookVerificationError,
     parse_installation_event,
