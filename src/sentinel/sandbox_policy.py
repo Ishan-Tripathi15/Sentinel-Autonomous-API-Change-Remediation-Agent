@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class SandboxPolicyError(ValueError):
@@ -32,7 +32,7 @@ class SandboxLimits:
 class SandboxRequest:
     workspace: str
     command: tuple[str, ...]
-    limits: SandboxLimits = SandboxLimits()
+    limits: SandboxLimits = field(default_factory=SandboxLimits)
 
 
 def validate_sandbox_request(request: SandboxRequest) -> None:
