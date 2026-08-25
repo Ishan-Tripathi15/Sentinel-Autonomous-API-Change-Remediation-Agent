@@ -3,7 +3,6 @@ from typing import Any
 
 from sentinel.llm import LLMProviderError, RemediationPlan
 
-
 MAX_DIAGNOSIS_CHARS = 4_000
 MAX_CHANGE_CHARS = 2_000
 MAX_COMMAND_CHARS = 500
