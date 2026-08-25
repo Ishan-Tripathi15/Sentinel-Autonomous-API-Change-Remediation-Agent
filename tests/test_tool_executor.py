@@ -27,7 +27,7 @@ def test_executor_validates_policy_and_invokes_registered_tool() -> None:
 
 def test_executor_denies_unknown_tool() -> None:
     executor = PolicyGatedToolExecutor(ToolRegistry({}))
-    with pytest.raises(ToolExecutionError, match="not registered"):
+    with pytest.raises(ToolExecutionError, match="not permitted: shell"):
         executor.execute(RemediationToolRequest("shell", ("rm -rf /",)))
 
 
