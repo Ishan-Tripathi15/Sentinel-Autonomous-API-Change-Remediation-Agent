@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
+import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
-import json
-import posixpath
 
 
 SUPPORTED_EXTENSIONS = {
