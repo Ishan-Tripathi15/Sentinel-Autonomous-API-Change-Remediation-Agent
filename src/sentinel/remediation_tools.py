@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from sentinel.tool_policy import DEFAULT_TOOL_POLICY, ToolPolicyError
+
 
 class RemediationToolError(ValueError):
     """Raised when a remediation tool request violates its contract."""
@@ -28,13 +30,11 @@ class RemediationTool(Protocol):
         """Execute an explicitly permitted remediation operation."""
 
 
-ALLOWED_TOOLS = frozenset({"read_file", "search_code", "apply_patch"})
+ALLOWED_TOOLS = DEFAULT_TOOL_POLICY.allowed_tools
 
 
 def validate_tool_request(request: RemediationToolRequest) -> None:
-    if request.tool not in ALLOWED_TOOLS:
-        raise RemediationToolError(f"tool is not permitted: {request.tool}")
-    if any("\x00" in argument for argument in request.arguments):
-        raise RemediationToolError("tool arguments must not contain null bytes")
-    if any(argument.strip() == "" for argument in request.arguments):
-        raise RemediationToolError("tool arguments must not be empty")
+    try:
+        DEFAULT_TOOL_POLICY.authorize(request.tool, request.arguments)
+    except ToolPolicyError as exc:
+        raise RemediationToolError(str(exc)) from exc
