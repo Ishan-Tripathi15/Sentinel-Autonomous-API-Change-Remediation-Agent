@@ -1,5 +1,10 @@
 from sentinel.sandbox_execution import SandboxExecutionResult, SandboxManifest
-from sentinel.worker import FailClosedWorker, WorkerStatus, bounded_artifact
+from sentinel.worker import (
+    FailClosedWorker,
+    VerificationRequest,
+    WorkerStatus,
+    bounded_artifact,
+)
 
 
 def manifest() -> SandboxManifest:
@@ -8,9 +13,7 @@ def manifest() -> SandboxManifest:
 
 def test_fail_closed_worker_never_executes_customer_code() -> None:
     result = FailClosedWorker().verify(
-        __import__("sentinel.worker", fromlist=["VerificationRequest"]).VerificationRequest(
-            job_id="job-1", manifest=manifest()
-        )
+        VerificationRequest(job_id="job-1", manifest=manifest())
     )
 
     assert result.status == WorkerStatus.REJECTED
