@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
 from .blast_radius import build_blast_radius
 from .diff import classify_openapi_changes, diff_openapi
+from .github_app import WebhookVerificationError, parse_installation_event, verify_webhook_signature
 from .models import ApiChange, BlastRadiusReport, ChangeEvent, RemediationJob
 from .orchestrator import create_remediation_job
+from .repository import RepositorySnapshot, build_repository_snapshot
 
 app = FastAPI(title="Sentinel", version="0.1.0")
 
@@ -43,6 +46,13 @@ class RemediationJobRequest(BaseModel):
     organization_id: str = Field(min_length=1)
     installation_id: str = Field(min_length=1)
     dry_run: bool = True
+
+
+class RepositorySnapshotRequest(BaseModel):
+    repository: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    files: dict[str, str]
+    include_globs: list[str] | None = None
 
 
 @app.get("/health")
@@ -92,6 +102,44 @@ def ingest_vendor_event(request: VendorEventRequest) -> ChangeEvent:
         event_id=str(uuid4()),
         detected_at=datetime.now(UTC).isoformat(),
     )
+
+
+@app.post("/v1/github/webhooks")
+def github_webhook(payload: bytes, x_hub_signature_256: str | None = Header(default=None)) -> dict[str, object]:
+    """Authenticate and normalize GitHub App installation events.
+
+    The webhook secret must be supplied through the runtime environment. No
+    repository access is performed here; an authenticated worker will consume
+    the normalized installation/repository data later.
+    """
+    secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+    if not x_hub_signature_256:
+        raise HTTPException(status_code=401, detail="missing GitHub webhook signature")
+    try:
+        verify_webhook_signature(payload, x_hub_signature_256, secret)
+        installation_id, action, repositories = parse_installation_event(payload)
+    except WebhookVerificationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return {
+        "accepted": True,
+        "installation_id": installation_id,
+        "action": action,
+        "repositories": [repository.__dict__ for repository in repositories],
+    }
+
+
+@app.post("/v1/repositories/snapshots", response_model=RepositorySnapshot)
+def ingest_repository_snapshot(request: RepositorySnapshotRequest) -> RepositorySnapshot:
+    """Normalize an authenticated repository snapshot without executing it."""
+    try:
+        return build_repository_snapshot(
+            repository=request.repository,
+            revision=request.revision,
+            files=request.files,
+            include_globs=request.include_globs,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/analysis/blast-radius", response_model=BlastRadiusReport)
