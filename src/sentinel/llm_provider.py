@@ -37,7 +37,10 @@ class StructuredLLMAdapter:
             raise LLMProviderError("change summary is required")
         prompt = self._build_prompt(context)
         raw = self._client.complete(
-            system="Return only a JSON remediation plan with diagnosis, changes, verification_commands, and confidence. Do not execute tools.",
+            system=(
+                "Return only a JSON remediation plan with diagnosis, changes, "
+                "verification_commands, and confidence. Do not execute tools."
+            ),
             user=prompt,
         )
         return parse_remediation_plan(raw)
