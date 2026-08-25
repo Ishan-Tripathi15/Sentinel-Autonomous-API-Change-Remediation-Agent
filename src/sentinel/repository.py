@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import posixpath
+from collections.abc import Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
-from typing import Mapping
 
 
 SUPPORTED_EXTENSIONS = {
@@ -91,7 +91,7 @@ def build_repository_snapshot(
         if include_globs and not any(fnmatch(path, pattern) for pattern in include_globs):
             continue
         if not isinstance(content, str):
-            raise ValueError(f"repository file content must be text: {path}")
+            raise TypeError(f"repository file content must be text: {path}")
         normalized[path] = content
 
     languages = tuple(sorted({lang for path in normalized if (lang := _language_for(path))}))
