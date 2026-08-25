@@ -22,6 +22,14 @@ def test_added_endpoint_is_new_feature() -> None:
     assert "/v1/payments" in endpoints
 
 
+def test_nested_endpoint_change_keeps_full_endpoint_path() -> None:
+    before = {"paths": {"/v1/payments/{payment_id}": {"get": {"responses": {"200": {}}}}}}
+    after = {"paths": {"/v1/payments/{payment_id}": {"get": {"responses": {"200": {"description": "ok"}}}}}}
+    changes = diff_openapi(before, after)
+    _, _, endpoints, _ = classify_openapi_changes(changes)
+    assert "/v1/payments/{payment_id}" in endpoints
+
+
 def test_deprecation_is_classified() -> None:
     before = {"paths": {"/v1/payments": {"get": {"deprecated": False}}}}
     after = {"paths": {"/v1/payments": {"get": {"deprecated": True}}}}
