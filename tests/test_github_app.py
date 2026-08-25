@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from sentinel.github_app import WebhookVerificationError, parse_installation_event, verify_webhook_signature
+from sentinel.github_app import (
+    WebhookVerificationError,
+    parse_installation_event,
+    verify_webhook_signature,
+)
 
 
 PAYLOAD = json.dumps(
