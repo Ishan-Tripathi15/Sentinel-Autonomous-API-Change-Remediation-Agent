@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sentinel.repository_tools import RepositoryToolError, _safe_path
 from sentinel.remediation_tools import RemediationToolRequest, RemediationToolResult
+from sentinel.repository_tools import RepositoryToolError, _safe_path
 
 
 _MAX_FILE_CHARS = 64_000
