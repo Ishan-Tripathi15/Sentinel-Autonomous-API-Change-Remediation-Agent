@@ -1,11 +1,16 @@
-from sentinel.models import BlastRadiusReport, ChangeEvent, ChangeType
+from sentinel.models import BlastRadiusReport, ChangeEvent, ChangeSeverity, ChangeType
 from sentinel.remediation import (
     DeterministicRemediationAgent,
     RemediationPolicyError,
     RemediationRequest,
     validate_remediation_request,
 )
-from sentinel.sandbox_policy import SandboxPolicyError, SandboxRequest, validate_sandbox_request
+from sentinel.sandbox_policy import (
+    SandboxLimits,
+    SandboxPolicyError,
+    SandboxRequest,
+    validate_sandbox_request,
+)
 
 
 def event() -> ChangeEvent:
@@ -13,15 +18,17 @@ def event() -> ChangeEvent:
         event_id="evt-1",
         vendor="stripe",
         change_type=ChangeType.BREAKING,
+        severity=ChangeSeverity.HIGH,
         summary="payment endpoint changed",
-        severity="high",
+        confidence=1.0,
+        detected_at="2026-01-01T00:00:00Z",
     )
 
 
 def radius() -> BlastRadiusReport:
     return BlastRadiusReport(
-        report_id="report-1",
         change_event_id="evt-1",
+        repository="acme/payments",
         call_sites=[],
         affected_files=["src/payments.ts"],
         confidence=0.9,
@@ -29,7 +36,7 @@ def radius() -> BlastRadiusReport:
 
 
 def request(**overrides: object) -> RemediationRequest:
-    values = {
+    values: dict[str, object] = {
         "change_event_id": "evt-1",
         "repository": "acme/payments",
         "base_revision": "abc123",
@@ -76,13 +83,11 @@ def test_sandbox_rejects_network() -> None:
     request = SandboxRequest(
         workspace="workspace",
         command=("pytest",),
-        limits=__import__("sentinel.sandbox_policy", fromlist=["SandboxLimits"]).SandboxLimits(
-            network_enabled=True
-        ),
+        limits=SandboxLimits(network_enabled=True),
     )
     try:
         validate_sandbox_request(request)
     except SandboxPolicyError as exc:
         assert "network access" in str(exc)
     else:
-        raise AssertionError("expected sandbox policy rejection")
+        raise AssertionError("expected policy rejection")
