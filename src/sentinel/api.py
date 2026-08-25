@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -54,7 +54,7 @@ def ingest_openapi(request: OpenApiDiffRequest) -> ChangeEvent:
     return ChangeEvent(
         **event.model_dump(),
         event_id=str(uuid4()),
-        detected_at=datetime.now(timezone.utc).isoformat(),
+        detected_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -73,5 +73,5 @@ def ingest_vendor_event(request: VendorEventRequest) -> ChangeEvent:
         raw_diff=request.payload,
         confidence=0.7,
         event_id=str(uuid4()),
-        detected_at=datetime.now(timezone.utc).isoformat(),
+        detected_at=datetime.now(UTC).isoformat(),
     )
