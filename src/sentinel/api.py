@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from .blast_radius import build_blast_radius
 from .diff import classify_openapi_changes, diff_openapi
-from .models import ApiChange, BlastRadiusReport, ChangeEvent
+from .models import ApiChange, BlastRadiusReport, ChangeEvent, RemediationJob
+from .orchestrator import create_remediation_job
 
 app = FastAPI(title="Sentinel", version="0.1.0")
 
@@ -34,6 +35,14 @@ class BlastRadiusRequest(BaseModel):
     repository: str = Field(min_length=1)
     files: dict[str, str]
     include_globs: list[str] | None = None
+
+
+class RemediationJobRequest(BaseModel):
+    change_event: ChangeEvent
+    blast_radius: BlastRadiusReport
+    organization_id: str = Field(min_length=1)
+    installation_id: str = Field(min_length=1)
+    dry_run: bool = True
 
 
 @app.get("/health")
@@ -94,3 +103,18 @@ def analyze_blast_radius(request: BlastRadiusRequest) -> BlastRadiusReport:
         files=request.files,
         include_globs=request.include_globs,
     )
+
+
+@app.post("/v1/remediation/jobs", response_model=RemediationJob)
+def create_job(request: RemediationJobRequest) -> RemediationJob:
+    """Plan a remediation job; MVP remains dry-run and side-effect free."""
+    try:
+        return create_remediation_job(
+            change_event=request.change_event,
+            blast_radius=request.blast_radius,
+            organization_id=request.organization_id,
+            installation_id=request.installation_id,
+            dry_run=request.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
