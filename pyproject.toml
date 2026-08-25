@@ -32,6 +32,10 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sentinel"]
 
 [tool.mypy]
 python_version = "3.11"
