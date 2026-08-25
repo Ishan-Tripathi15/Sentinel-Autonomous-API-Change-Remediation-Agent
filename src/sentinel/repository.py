@@ -93,7 +93,12 @@ def build_repository_snapshot(
             raise TypeError(f"repository file content must be text: {path}")
         normalized[path] = content
 
-    languages = tuple(sorted({lang for path in normalized if (lang := _language_for(path))}))
+    languages_set = {
+        lang for path in normalized if (lang := _language_for(path))
+    }
+    if "pyproject.toml" in normalized or "requirements.txt" in normalized:
+        languages_set.add("python")
+    languages = tuple(sorted(languages_set))
     return RepositorySnapshot(
         repository=repository,
         revision=revision,
