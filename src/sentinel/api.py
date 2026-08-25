@@ -6,8 +6,9 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
+from .blast_radius import build_blast_radius
 from .diff import classify_openapi_changes, diff_openapi
-from .models import ApiChange, ChangeEvent
+from .models import ApiChange, BlastRadiusReport, ChangeEvent
 
 app = FastAPI(title="Sentinel", version="0.1.0")
 
@@ -26,6 +27,13 @@ class VendorEventRequest(BaseModel):
     version: str | None = None
     summary: str = Field(min_length=1)
     payload: dict
+
+
+class BlastRadiusRequest(BaseModel):
+    change_event: ChangeEvent
+    repository: str = Field(min_length=1)
+    files: dict[str, str]
+    include_globs: list[str] | None = None
 
 
 @app.get("/health")
@@ -74,4 +82,15 @@ def ingest_vendor_event(request: VendorEventRequest) -> ChangeEvent:
         confidence=0.7,
         event_id=str(uuid4()),
         detected_at=datetime.now(UTC).isoformat(),
+    )
+
+
+@app.post("/v1/analysis/blast-radius", response_model=BlastRadiusReport)
+def analyze_blast_radius(request: BlastRadiusRequest) -> BlastRadiusReport:
+    """Analyze supplied source snapshots without executing customer code."""
+    return build_blast_radius(
+        change_event=request.change_event,
+        repository=request.repository,
+        files=request.files,
+        include_globs=request.include_globs,
     )
