@@ -10,7 +10,6 @@ from sentinel.github_app import (
     verify_webhook_signature,
 )
 
-
 PAYLOAD = json.dumps(
     {
         "action": "created",
