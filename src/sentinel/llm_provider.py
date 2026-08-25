@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from sentinel.llm import LLMProviderError, RemediationContext, RemediationPlan
+from sentinel.llm_schema import parse_remediation_plan
 
 
 class ChatClient(Protocol):
@@ -24,7 +25,7 @@ class ProviderConfig:
 
 
 class StructuredLLMAdapter:
-    """Provider-neutral adapter; transport is injected and model output is validated."""
+    """Provider-neutral adapter; transport is injected and model output is strictly validated."""
 
     def __init__(self, client: ChatClient, config: ProviderConfig) -> None:
         config.validate()
@@ -35,13 +36,14 @@ class StructuredLLMAdapter:
         if not context.change_summary.strip():
             raise LLMProviderError("change summary is required")
         prompt = self._build_prompt(context)
-        self._client.complete(
-            system="Return only a JSON remediation plan; do not execute tools.",
+        raw = self._client.complete(
+            system=(
+                "Return only a JSON remediation plan with diagnosis, changes, "
+                "verification_commands, and confidence. Do not execute tools."
+            ),
             user=prompt,
         )
-        raise LLMProviderError(
-            "model response parsing is intentionally unavailable until a strict JSON schema is configured"
-        )
+        return parse_remediation_plan(raw)
 
     def _build_prompt(self, context: RemediationContext) -> str:
         files = "\n".join(f"- {path}" for path in context.affected_files)
