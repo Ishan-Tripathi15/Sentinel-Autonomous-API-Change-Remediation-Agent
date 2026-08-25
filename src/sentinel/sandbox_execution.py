@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from sentinel.sandbox_policy import SandboxLimits, SandboxPolicyError
 
@@ -18,7 +19,7 @@ class SandboxManifest:
     workspace: str
     command: tuple[str, ...]
     environment: Mapping[str, str]
-    limits: SandboxLimits = SandboxLimits()
+    limits: SandboxLimits = field(default_factory=SandboxLimits)
     network_enabled: bool = False
     read_only_root: bool = True
 
