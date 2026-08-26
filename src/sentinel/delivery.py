@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from sentinel.orchestrator import RemediationStatus
-from sentinel.models import RemediationJob
+if TYPE_CHECKING:
+    from sentinel.models import RemediationJob
 
 
 MAX_PATCH_CHARS = 128_000
@@ -40,6 +41,8 @@ def build_dry_run_delivery(
     artifact can later be handed to a provider-specific GitHub delivery adapter
     after the product's autonomous-write safety gate is explicitly enabled.
     """
+    from sentinel.orchestrator import RemediationStatus
+
     if job.status != RemediationStatus.VERIFIED.value:
         raise DeliveryError("only verified remediation jobs can be delivered")
     if not job.dry_run:
