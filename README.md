@@ -20,6 +20,8 @@ This repository starts with the MVP described in the build brief: Stripe/OpenAPI
 docker compose up --build
 ```
 
+The local stack starts PostgreSQL, applies database migrations, and then starts the API.
+
 API health: `http://localhost:8000/health`
 
 Run tests locally:
@@ -28,6 +30,20 @@ Run tests locally:
 python -m pip install -e '.[dev]'
 pytest
 ```
+
+For database-backed tests, set `SENTINEL_DATABASE_URL` to a reachable PostgreSQL database.
+
+## Persistent audit storage
+
+Production audit records are stored in PostgreSQL through `PostgresAuditSink`. The storage boundary remains behind the existing `AuditSink` protocol, so the remediation domain does not depend on PostgreSQL-specific types.
+
+Migrations are packaged under `src/sentinel/migrations` and applied with:
+
+```bash
+SENTINEL_DATABASE_URL=postgresql://... python -m sentinel.migrate
+```
+
+The migration runner records applied migration filenames in `schema_migrations` and is safe to execute repeatedly.
 
 ## Architecture
 
@@ -48,6 +64,12 @@ Vendor/OpenAPI source
                      \       |        /
                           Delivery
                        dry-run / PR
+
+Audit boundary
+      |
+      +---- In-memory sink  -> tests/dev
+      |
+      +---- PostgreSQL sink -> production
 ```
 
 See `docs/architecture.md` and `docs/mvp.md` for implementation boundaries.
