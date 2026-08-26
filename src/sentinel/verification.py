@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+from .sandbox import IsolatedSandboxRequired, Sandbox
 
 
 class VerificationError(RuntimeError):
@@ -17,6 +18,7 @@ class VerificationResult:
     returncode: int
     stdout: str
     stderr: str
+    duration_ms: int
 
     @property
     def passed(self) -> bool:
@@ -25,13 +27,14 @@ class VerificationResult:
 
 
 class VerificationEngine:
-    """Execute only exact allowlisted verification commands without a shell."""
+    """Validate verification commands and execute them only through a sandbox."""
 
     def __init__(
         self,
         allowed_commands: Sequence[Sequence[str]],
+        sandbox: Sandbox,
         *,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: int = 120,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
@@ -39,10 +42,11 @@ class VerificationEngine:
         if any(not command for command in normalized):
             raise ValueError("allowed verification commands must not be empty")
         self._allowed_commands = frozenset(normalized)
+        self._sandbox = sandbox
         self._timeout_seconds = timeout_seconds
 
     def verify(self, command: Sequence[str]) -> VerificationResult:
-        """Run one exact allowlisted command and return its captured result."""
+        """Run one exact allowlisted command inside the configured sandbox."""
         normalized = tuple(command)
         if not normalized:
             raise VerificationError("verification command must not be empty")
@@ -50,22 +54,19 @@ class VerificationEngine:
             raise VerificationError("verification command is not allowlisted")
 
         try:
-            completed = subprocess.run(
-                normalized,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_seconds,
-                shell=False,
+            result = self._sandbox.run(
+                list(normalized),
+                timeout_seconds=self._timeout_seconds,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise VerificationError("verification command timed out") from exc
-        except OSError as exc:
-            raise VerificationError("verification command could not start") from exc
+        except IsolatedSandboxRequired as exc:
+            raise VerificationError("verification sandbox is not configured") from exc
+        except (OSError, TimeoutError) as exc:
+            raise VerificationError("verification command could not be completed") from exc
 
         return VerificationResult(
             command=normalized,
-            returncode=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            returncode=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            duration_ms=result.duration_ms,
         )
