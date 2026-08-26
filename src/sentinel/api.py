@@ -11,6 +11,7 @@ from .blast_radius import build_blast_radius
 from .delivery import DryRunDelivery, build_dry_run_delivery
 from .diff import classify_openapi_changes, diff_openapi
 from .github_app import WebhookVerificationError, parse_installation_event, verify_webhook_signature
+from .github_delivery import GitHubDeliveryClient, GitHubFileChange, GitHubPullRequest
 from .models import ApiChange, BlastRadiusReport, ChangeEvent, RemediationJob
 from .orchestrator import create_remediation_job
 from .repository import RepositorySnapshot, build_repository_snapshot
@@ -61,6 +62,21 @@ class DryRunDeliveryRequest(BaseModel):
     repository: str = Field(min_length=1, max_length=256)
     summary: str = Field(min_length=1)
     patch_diff: str = Field(min_length=1, max_length=128_000)
+
+
+class GitHubFileChangeRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=256)
+    content: str = Field(min_length=1, max_length=64_000)
+
+
+class GitHubDeliveryRequest(BaseModel):
+    job: RemediationJob
+    repository: str = Field(min_length=1, max_length=256)
+    base_branch: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(min_length=1, max_length=16_000)
+    changes: list[GitHubFileChangeRequest] = Field(min_length=1, max_length=32)
+    allow_write: bool = False
 
 
 @app.get("/health")
@@ -186,5 +202,26 @@ def build_delivery(request: DryRunDeliveryRequest) -> DryRunDelivery:
             summary=request.summary,
             patch_diff=request.patch_diff,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/remediation/github-delivery", response_model=GitHubPullRequest)
+def github_delivery(request: GitHubDeliveryRequest) -> GitHubPullRequest:
+    """Create a GitHub PR through the guarded provider delivery boundary."""
+    token = os.environ.get("GITHUB_INSTALLATION_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="GitHub installation token is not configured")
+    try:
+        with GitHubDeliveryClient(token) as client:
+            return client.deliver(
+                request.job,
+                repository=request.repository,
+                base_branch=request.base_branch,
+                title=request.title,
+                body=request.body,
+                changes=[GitHubFileChange(path=change.path, content=change.content) for change in request.changes],
+                allow_write=request.allow_write,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
