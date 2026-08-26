@@ -8,6 +8,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
 from .blast_radius import build_blast_radius
+from .delivery import DryRunDelivery, build_dry_run_delivery
 from .diff import classify_openapi_changes, diff_openapi
 from .github_app import WebhookVerificationError, parse_installation_event, verify_webhook_signature
 from .models import ApiChange, BlastRadiusReport, ChangeEvent, RemediationJob
@@ -53,6 +54,13 @@ class RepositorySnapshotRequest(BaseModel):
     revision: str = Field(min_length=1)
     files: dict[str, str]
     include_globs: list[str] | None = None
+
+
+class DryRunDeliveryRequest(BaseModel):
+    job: RemediationJob
+    repository: str = Field(min_length=1, max_length=256)
+    summary: str = Field(min_length=1)
+    patch_diff: str = Field(min_length=1, max_length=128_000)
 
 
 @app.get("/health")
@@ -163,6 +171,20 @@ def create_job(request: RemediationJobRequest) -> RemediationJob:
             organization_id=request.organization_id,
             installation_id=request.installation_id,
             dry_run=request.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/remediation/dry-run-delivery", response_model=DryRunDelivery)
+def build_delivery(request: DryRunDeliveryRequest) -> DryRunDelivery:
+    """Return the proposed PR artifact without creating a repository side effect."""
+    try:
+        return build_dry_run_delivery(
+            request.job,
+            repository=request.repository,
+            summary=request.summary,
+            patch_diff=request.patch_diff,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
