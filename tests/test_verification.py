@@ -48,9 +48,11 @@ def test_unknown_command_fails_closed_without_execution() -> None:
     allowed = ("python", "-m", "pytest")
     engine = VerificationEngine([allowed])
 
-    with patch("sentinel.verification.subprocess.run") as run:
-        with pytest.raises(VerificationError, match="not allowlisted"):
-            engine.verify(("python", "-c", "print('unsafe')"))
+    with (
+        patch("sentinel.verification.subprocess.run") as run,
+        pytest.raises(VerificationError, match="not allowlisted"),
+    ):
+        engine.verify(("python", "-c", "print('unsafe')"))
 
     run.assert_not_called()
 
@@ -77,18 +79,22 @@ def test_timeout_fails_closed() -> None:
     engine = VerificationEngine([command], timeout_seconds=1)
     timeout = TimeoutExpired(command, 1)
 
-    with patch("sentinel.verification.subprocess.run", side_effect=timeout):
-        with pytest.raises(VerificationError, match="timed out"):
-            engine.verify(command)
+    with (
+        patch("sentinel.verification.subprocess.run", side_effect=timeout),
+        pytest.raises(VerificationError, match="timed out"),
+    ):
+        engine.verify(command)
 
 
 def test_process_start_failure_fails_closed() -> None:
     command = ("python", "-m", "pytest")
     engine = VerificationEngine([command])
 
-    with patch(
-        "sentinel.verification.subprocess.run",
-        side_effect=OSError("executable missing"),
+    with (
+        patch(
+            "sentinel.verification.subprocess.run",
+            side_effect=OSError("executable missing"),
+        ),
+        pytest.raises(VerificationError, match="could not start"),
     ):
-        with pytest.raises(VerificationError, match="could not start"):
-            engine.verify(command)
+        engine.verify(command)
