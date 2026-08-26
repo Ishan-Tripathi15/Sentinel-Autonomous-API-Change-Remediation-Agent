@@ -41,11 +41,30 @@ class RemediationAuditRecord:
     delivery_outcome: Mapping[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RemediationAuditEvent:
+    """Append-only lifecycle event for one remediation job."""
+
+    audit_event_id: str
+    recorded_at: str
+    organization_id: str
+    installation_id: str
+    job_id: str
+    change_event_id: str
+    event_type: str
+    from_status: str | None = None
+    to_status: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+
 class AuditSink(Protocol):
     """Storage-neutral audit sink used by workflow workers."""
 
     def append(self, record: RemediationAuditRecord) -> None:
         """Persist one immutable audit record."""
+
+    def append_event(self, event: RemediationAuditEvent) -> None:
+        """Persist one immutable lifecycle event."""
 
 
 def build_audit_record(
@@ -113,15 +132,57 @@ def build_audit_record(
     )
 
 
-class InMemoryAuditSink:
-    """Thread-safe audit sink for MVP and deterministic tests.
+def build_audit_event(
+    job: RemediationJob,
+    *,
+    audit_event_id: str,
+    event_type: str,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+    recorded_at: str | None = None,
+) -> RemediationAuditEvent:
+    """Build a bounded lifecycle event without storing secrets."""
+    if not audit_event_id.strip():
+        raise AuditError("audit_event_id is required")
+    if not event_type.strip():
+        raise AuditError("event_type is required")
+    if not job.job_id.strip() or not job.organization_id.strip() or not job.installation_id.strip():
+        raise AuditError("job identity fields are required")
+    if not job.change_event_id.strip():
+        raise AuditError("change event identity is required")
+    for name, value in (("event_type", event_type), ("from_status", from_status), ("to_status", to_status)):
+        if value is not None and len(value) > _MAX_VERSION_CHARS:
+            raise AuditError(f"{name} exceeds the audit size limit")
+        if value is not None and "\x00" in value:
+            raise AuditError(f"{name} must not contain null bytes")
 
-    Production storage adapters can implement the same AuditSink protocol
-    without changing the remediation domain objects.
-    """
+    bounded_metadata = dict(metadata or {})
+    if len(bounded_metadata) > _MAX_DELIVERY_FIELDS:
+        raise AuditError("audit metadata contains too many fields")
+    if any("\x00" in str(key) or "\x00" in str(value) for key, value in bounded_metadata.items()):
+        raise AuditError("audit metadata must not contain null bytes")
+
+    return RemediationAuditEvent(
+        audit_event_id=audit_event_id,
+        recorded_at=recorded_at or datetime.now(UTC).isoformat(),
+        organization_id=job.organization_id,
+        installation_id=job.installation_id,
+        job_id=job.job_id,
+        change_event_id=job.change_event_id,
+        event_type=event_type,
+        from_status=from_status,
+        to_status=to_status,
+        metadata=bounded_metadata,
+    )
+
+
+class InMemoryAuditSink:
+    """Thread-safe audit sink for MVP and deterministic tests."""
 
     def __init__(self) -> None:
         self._records: list[RemediationAuditRecord] = []
+        self._events: list[RemediationAuditEvent] = []
         self._lock = Lock()
 
     def append(self, record: RemediationAuditRecord) -> None:
@@ -130,6 +191,16 @@ class InMemoryAuditSink:
                 raise AuditError("audit_id must be unique")
             self._records.append(record)
 
+    def append_event(self, event: RemediationAuditEvent) -> None:
+        with self._lock:
+            if any(existing.audit_event_id == event.audit_event_id for existing in self._events):
+                raise AuditError("audit_event_id must be unique")
+            self._events.append(event)
+
     def list(self) -> tuple[RemediationAuditRecord, ...]:
         with self._lock:
             return tuple(self._records)
+
+    def list_events(self) -> tuple[RemediationAuditEvent, ...]:
+        with self._lock:
+            return tuple(self._events)
