@@ -40,26 +40,6 @@ def make_result(completed: bool) -> RemediationWorkerResult:
     return RemediationWorkerResult(job=job, completed=completed)
 
 
-def test_runtime_counts_completed_and_failed_jobs() -> None:
-    stop_event = Event()
-    worker = FakeWorker([make_result(True), make_result(False), None])
-    runtime = RemediationWorkerRuntime(
-        worker,
-        config=WorkerRuntimeConfig(lease_seconds=42),
-        stop_event=stop_event,
-    )
-
-    def stop_after_idle() -> None:
-        worker.run_once = worker.run_once  # keep the worker contract explicit
-
-    _ = stop_after_idle
-    stop_event.set()
-    stats = runtime.run()
-
-    assert stats.jobs_completed == 0
-    assert stats.jobs_failed == 0
-
-
 def test_runtime_counts_jobs_until_worker_requests_shutdown() -> None:
     stop_event = Event()
     worker = FakeWorker([make_result(True), make_result(False), None])
