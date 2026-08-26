@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sentinel.llm import RemediationContext, StructuredLLMAdapter
+from sentinel.llm import LLMProvider, RemediationContext
 from sentinel.tool_executor import PolicyGatedToolExecutor, ToolExecutionError
 from sentinel.tool_requests import ToolRequestCompilationError, compile_tool_requests
 
@@ -24,7 +24,7 @@ class RemediationOrchestrator:
 
     def __init__(
         self,
-        llm: StructuredLLMAdapter,
+        llm: LLMProvider,
         executor: PolicyGatedToolExecutor,
     ) -> None:
         self._llm = llm
@@ -32,7 +32,7 @@ class RemediationOrchestrator:
 
     def remediate(self, context: RemediationContext) -> RemediationRunResult:
         try:
-            plan = self._llm.propose(context)
+            plan = self._llm.generate_plan(context)
             batch = compile_tool_requests(plan)
             executed: list[str] = []
             for request in batch.requests:
