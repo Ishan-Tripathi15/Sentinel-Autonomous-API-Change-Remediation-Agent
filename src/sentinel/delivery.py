@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import RemediationJob
-from .orchestrator import RemediationStatus
+from sentinel.models import RemediationJob
+from sentinel.orchestrator import RemediationStatus
 
 
 MAX_PATCH_CHARS = 128_000
@@ -50,10 +50,11 @@ def build_dry_run_delivery(
         raise DeliveryError("delivery summary is required")
     if not patch_diff.strip():
         raise DeliveryError("patch diff is required for delivery")
-    if len(patch_diff) > MAX_PATCH_CHARS:
-        raise DeliveryError("patch diff exceeds delivery size limit")
     if any(char == "\x00" for char in (repository, summary, patch_diff)):
         raise DeliveryError("delivery fields must not contain null bytes")
+
+    if len(patch_diff) > MAX_PATCH_CHARS:
+        raise DeliveryError("patch diff exceeds delivery size limit")
 
     branch_name = f"sentinel/remediation/{job.job_id}"
     title = f"chore: remediate API change ({job.job_id})"
