@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from .models import RemediationJob, VerificationResult
-from .orchestrator import OrchestrationError, RemediationStatus, transition_job
+from .orchestrator import OrchestrationError, RemediationStatus
 from .verification import VerificationEngine, VerificationError
 
 
