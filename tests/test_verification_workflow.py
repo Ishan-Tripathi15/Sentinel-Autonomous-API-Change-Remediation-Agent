@@ -9,7 +9,6 @@ from sentinel.orchestrator import OrchestrationError, RemediationStatus
 from sentinel.verification import VerificationError, VerificationResult
 from sentinel.verification_workflow import verify_remediation_job
 
-
 COMMAND = ("python", "-m", "pytest")
 
 
