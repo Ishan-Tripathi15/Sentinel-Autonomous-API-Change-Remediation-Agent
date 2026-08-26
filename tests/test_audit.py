@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sentinel.audit import AuditError, InMemoryAuditSink, build_audit_record
+from sentinel.audit import AuditError, InMemoryAuditSink, build_audit_event, build_audit_record
 from sentinel.models import ChangeEvent, RemediationJob, VerificationResult
 
 
@@ -69,6 +69,28 @@ def test_build_audit_record_captures_required_lifecycle_data() -> None:
     assert record.delivery_outcome["number"] == 42
 
 
+def test_build_audit_event_captures_status_transition() -> None:
+    audit_event = build_audit_event(
+        job(),
+        audit_event_id="event-audit-1",
+        event_type="verification_completed",
+        from_status="verifying",
+        to_status="verified",
+        metadata={"passed": True},
+        recorded_at="2026-08-27T00:00:00+00:00",
+    )
+
+    assert audit_event.job_id == "job-1"
+    assert audit_event.from_status == "verifying"
+    assert audit_event.to_status == "verified"
+    assert audit_event.metadata == {"passed": True}
+
+
+def test_build_audit_event_rejects_null_bytes() -> None:
+    with pytest.raises(AuditError, match="null bytes"):
+        build_audit_event(job(), audit_event_id="event-1", event_type="bad\x00event")
+
+
 def test_in_memory_sink_is_append_only_and_rejects_duplicate_ids() -> None:
     sink = InMemoryAuditSink()
     record = build_audit_record(job(), event(), audit_id="audit-1")
@@ -78,6 +100,16 @@ def test_in_memory_sink_is_append_only_and_rejects_duplicate_ids() -> None:
 
     with pytest.raises(AuditError, match="unique"):
         sink.append(record)
+
+
+def test_in_memory_event_ids_are_idempotency_keys() -> None:
+    sink = InMemoryAuditSink()
+    audit_event = build_audit_event(job(), audit_event_id="event-1", event_type="started")
+    sink.append_event(audit_event)
+    assert sink.list_events() == (audit_event,)
+
+    with pytest.raises(AuditError, match="unique"):
+        sink.append_event(audit_event)
 
 
 def test_rejects_oversized_or_null_audit_fields() -> None:
