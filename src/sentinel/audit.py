@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from typing import Mapping, Protocol
 
-from sentinel.models import RemediationJob
+from sentinel.models import ChangeEvent, RemediationJob
 
 
 _MAX_TEXT_CHARS = 128_000
@@ -27,6 +27,12 @@ class RemediationAuditRecord:
     installation_id: str
     job_id: str
     change_event_id: str
+    source_vendor: str
+    source_url: str | None
+    source_version: str | None
+    change_type: str
+    change_severity: str
+    change_summary: str
     status: str
     model_version: str | None
     prompt_version: str | None
@@ -44,6 +50,7 @@ class AuditSink(Protocol):
 
 def build_audit_record(
     job: RemediationJob,
+    change_event: ChangeEvent,
     *,
     audit_id: str,
     delivery_outcome: Mapping[str, object] | None = None,
@@ -54,14 +61,25 @@ def build_audit_record(
         raise AuditError("audit_id is required")
     if not job.job_id.strip() or not job.organization_id.strip() or not job.installation_id.strip():
         raise AuditError("job identity fields are required")
-    if not job.change_event_id.strip() or not job.status.strip():
-        raise AuditError("change event and status are required")
+    if not job.change_event_id.strip() or job.change_event_id != change_event.event_id:
+        raise AuditError("change event does not belong to the remediation job")
+    if not job.status.strip():
+        raise AuditError("job status is required")
+    if not change_event.vendor.strip() or not change_event.summary.strip():
+        raise AuditError("change source and summary are required")
+
+    source_url = str(change_event.source_url) if change_event.source_url else None
     for name, value in (
         ("model_version", job.model_version),
         ("prompt_version", job.prompt_version),
         ("patch_diff", job.patch_diff),
+        ("source_vendor", change_event.vendor),
+        ("source_url", source_url),
+        ("source_version", change_event.version),
+        ("change_summary", change_event.summary),
     ):
-        if value is not None and len(value) > (_MAX_VERSION_CHARS if name != "patch_diff" else _MAX_TEXT_CHARS):
+        limit = _MAX_VERSION_CHARS if name in {"model_version", "prompt_version", "source_vendor", "source_version"} else _MAX_TEXT_CHARS
+        if value is not None and len(value) > limit:
             raise AuditError(f"{name} exceeds the audit size limit")
         if value is not None and "\x00" in value:
             raise AuditError(f"{name} must not contain null bytes")
@@ -72,16 +90,20 @@ def build_audit_record(
     if any("\x00" in str(key) or "\x00" in str(value) for key, value in delivery.items()):
         raise AuditError("delivery outcome must not contain null bytes")
 
-    verification = tuple(
-        result.model_dump(exclude_none=True) for result in job.verification
-    )
+    verification = tuple(result.model_dump(exclude_none=True) for result in job.verification)
     return RemediationAuditRecord(
         audit_id=audit_id,
         recorded_at=recorded_at or datetime.now(UTC).isoformat(),
         organization_id=job.organization_id,
         installation_id=job.installation_id,
         job_id=job.job_id,
-        change_event_id=job.change_event_id,
+        change_event_id=change_event.event_id,
+        source_vendor=change_event.vendor,
+        source_url=source_url,
+        source_version=change_event.version,
+        change_type=change_event.change_type.value,
+        change_severity=change_event.severity.value,
+        change_summary=change_event.summary,
         status=job.status,
         model_version=job.model_version,
         prompt_version=job.prompt_version,
