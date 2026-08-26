@@ -8,7 +8,6 @@ from typing import Protocol
 
 from sentinel.models import ChangeEvent, RemediationJob
 
-
 _MAX_TEXT_CHARS = 128_000
 _MAX_VERSION_CHARS = 256
 _MAX_DELIVERY_FIELDS = 32
