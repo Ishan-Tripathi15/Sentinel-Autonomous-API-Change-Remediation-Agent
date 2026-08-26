@@ -209,17 +209,21 @@ def append_remediation_event(request: RemediationAuditEventRequest) -> dict[str,
 @app.post("/v1/remediation/jobs/claim", response_model=RemediationJob | None)
 def claim_job(request: JobClaimRequest) -> RemediationJob | None:
     try:
-        return get_job_queue().claim(worker_id=request.worker_id, lease_seconds=request.lease_seconds)
-    except JobQueueError as exc:
-        raise HTTPException(status_code=503, detail="job queue is unavailable") from exc
+        job = get_job_queue().claim(worker_id=request.worker_id, lease_seconds=request.lease_seconds)
+        if job is not None:
+            get_audit_sink().append_event(build_audit_event(job, audit_event_id=str(uuid4()), event_type="job_claimed", from_status="queued", to_status="running", metadata={"worker_id": request.worker_id}))
+        return job
+    except (JobQueueError, AuditError) as exc:
+        raise HTTPException(status_code=503, detail="job queue or audit storage is unavailable") from exc
 
 
 @app.post("/v1/remediation/jobs/complete")
 def complete_job(request: JobCompleteRequest) -> dict[str, bool]:
     try:
         get_job_queue().complete(job_id=request.job_id, worker_id=request.worker_id, payload=request.job)
+        get_audit_sink().append_event(build_audit_event(request.job, audit_event_id=str(uuid4()), event_type="job_completed", from_status="running", to_status=request.job.status, metadata={"worker_id": request.worker_id}))
         return {"accepted": True}
-    except JobQueueError as exc:
+    except (JobQueueError, AuditError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -227,8 +231,9 @@ def complete_job(request: JobCompleteRequest) -> dict[str, bool]:
 def fail_job(request: JobFailRequest) -> dict[str, bool]:
     try:
         get_job_queue().fail(job_id=request.job_id, worker_id=request.worker_id, payload=request.job, retry_after_seconds=request.retry_after_seconds)
+        get_audit_sink().append_event(build_audit_event(request.job, audit_event_id=str(uuid4()), event_type="job_requeued", from_status="running", to_status="queued", metadata={"worker_id": request.worker_id, "retry_after_seconds": request.retry_after_seconds}))
         return {"accepted": True}
-    except JobQueueError as exc:
+    except (JobQueueError, AuditError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
