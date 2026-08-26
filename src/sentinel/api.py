@@ -14,6 +14,8 @@ from .delivery import DryRunDelivery, build_dry_run_delivery
 from .diff import classify_openapi_changes, diff_openapi
 from .github_app import WebhookVerificationError, parse_installation_event, verify_webhook_signature
 from .github_delivery import GitHubDeliveryClient, GitHubFileChange, GitHubPullRequest
+from .job_queue import JobQueueError
+from .job_queue_runtime import get_job_queue
 from .models import ApiChange, BlastRadiusReport, ChangeEvent, RemediationJob
 from .orchestrator import create_remediation_job
 from .repository import RepositorySnapshot, build_repository_snapshot
@@ -89,6 +91,24 @@ class GitHubDeliveryRequest(BaseModel):
     allow_write: bool = False
 
 
+class JobClaimRequest(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=256)
+    lease_seconds: int = Field(default=300, ge=1, le=3600)
+
+
+class JobCompleteRequest(BaseModel):
+    job_id: str = Field(min_length=1)
+    worker_id: str = Field(min_length=1, max_length=256)
+    job: RemediationJob
+
+
+class JobFailRequest(BaseModel):
+    job_id: str = Field(min_length=1)
+    worker_id: str = Field(min_length=1, max_length=256)
+    job: RemediationJob
+    retry_after_seconds: int = Field(default=30, ge=0, le=3600)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "sentinel"}
@@ -112,16 +132,11 @@ def ingest_openapi(request: OpenApiDiffRequest) -> ChangeEvent:
         raw_diff={"changes": [change.__dict__ for change in changes]},
         confidence=0.98,
     )
-    return ChangeEvent(
-        **event.model_dump(),
-        event_id=str(uuid4()),
-        detected_at=datetime.now(UTC).isoformat(),
-    )
+    return ChangeEvent(**event.model_dump(), event_id=str(uuid4()), detected_at=datetime.now(UTC).isoformat())
 
 
 @app.post("/v1/vendors/events", response_model=ChangeEvent)
 def ingest_vendor_event(request: VendorEventRequest) -> ChangeEvent:
-    """Vendor push interface shared by future embedded-agent deployments."""
     return ChangeEvent(
         vendor=request.vendor,
         source_url=request.source_url,
@@ -140,7 +155,6 @@ def ingest_vendor_event(request: VendorEventRequest) -> ChangeEvent:
 
 @app.post("/v1/github/webhooks")
 def github_webhook(payload: bytes, x_hub_signature_256: str | None = Header(default=None)) -> dict[str, object]:
-    """Authenticate and normalize GitHub App installation events."""
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     if not x_hub_signature_256:
         raise HTTPException(status_code=401, detail="missing GitHub webhook signature")
@@ -149,115 +163,95 @@ def github_webhook(payload: bytes, x_hub_signature_256: str | None = Header(defa
         installation_id, action, repositories = parse_installation_event(payload)
     except WebhookVerificationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return {
-        "accepted": True,
-        "installation_id": installation_id,
-        "action": action,
-        "repositories": [repository.__dict__ for repository in repositories],
-    }
+    return {"accepted": True, "installation_id": installation_id, "action": action, "repositories": [repository.__dict__ for repository in repositories]}
 
 
 @app.post("/v1/repositories/snapshots", response_model=RepositorySnapshot)
 def ingest_repository_snapshot(request: RepositorySnapshotRequest) -> RepositorySnapshot:
-    """Normalize an authenticated repository snapshot without executing it."""
     try:
-        return build_repository_snapshot(
-            repository=request.repository,
-            revision=request.revision,
-            files=request.files,
-            include_globs=request.include_globs,
-        )
+        return build_repository_snapshot(repository=request.repository, revision=request.revision, files=request.files, include_globs=request.include_globs)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/analysis/blast-radius", response_model=BlastRadiusReport)
 def analyze_blast_radius(request: BlastRadiusRequest) -> BlastRadiusReport:
-    """Analyze supplied source snapshots without executing customer code."""
-    return build_blast_radius(
-        change_event=request.change_event,
-        repository=request.repository,
-        files=request.files,
-        include_globs=request.include_globs,
-    )
+    return build_blast_radius(change_event=request.change_event, repository=request.repository, files=request.files, include_globs=request.include_globs)
 
 
 @app.post("/v1/remediation/jobs", response_model=RemediationJob)
 def create_job(request: RemediationJobRequest) -> RemediationJob:
-    """Plan a remediation job and persist its initial audit snapshot and event."""
     try:
-        job = create_remediation_job(
-            change_event=request.change_event,
-            blast_radius=request.blast_radius,
-            organization_id=request.organization_id,
-            installation_id=request.installation_id,
-            dry_run=request.dry_run,
-        )
+        job = create_remediation_job(change_event=request.change_event, blast_radius=request.blast_radius, organization_id=request.organization_id, installation_id=request.installation_id, dry_run=request.dry_run)
         sink = get_audit_sink()
         sink.append(build_audit_record(job, request.change_event, audit_id=str(uuid4())))
-        sink.append_event(
-            build_audit_event(
-                job,
-                audit_event_id=str(uuid4()),
-                event_type="job_created",
-                to_status=job.status,
-            )
-        )
+        sink.append_event(build_audit_event(job, audit_event_id=str(uuid4()), event_type="job_created", to_status=job.status))
+        get_job_queue().enqueue(job)
         return job
     except AuditError as exc:
         raise HTTPException(status_code=503, detail="audit persistence is unavailable") from exc
+    except JobQueueError as exc:
+        raise HTTPException(status_code=503, detail="job queue is unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/remediation/jobs/events")
 def append_remediation_event(request: RemediationAuditEventRequest) -> dict[str, object]:
-    """Append a lifecycle transition emitted by a remediation worker."""
     try:
-        event = build_audit_event(
-            request.job,
-            audit_event_id=str(uuid4()),
-            event_type=request.event_type,
-            from_status=request.from_status,
-            to_status=request.to_status,
-            metadata=request.metadata,
-        )
+        event = build_audit_event(request.job, audit_event_id=str(uuid4()), event_type=request.event_type, from_status=request.from_status, to_status=request.to_status, metadata=request.metadata)
         get_audit_sink().append_event(event)
         return {"accepted": True, "audit_event_id": event.audit_event_id}
     except AuditError as exc:
         raise HTTPException(status_code=503, detail="audit persistence is unavailable") from exc
 
 
+@app.post("/v1/remediation/jobs/claim", response_model=RemediationJob | None)
+def claim_job(request: JobClaimRequest) -> RemediationJob | None:
+    try:
+        job = get_job_queue().claim(worker_id=request.worker_id, lease_seconds=request.lease_seconds)
+        if job is not None:
+            get_audit_sink().append_event(build_audit_event(job, audit_event_id=str(uuid4()), event_type="job_claimed", from_status="queued", to_status="running", metadata={"worker_id": request.worker_id}))
+        return job
+    except (JobQueueError, AuditError) as exc:
+        raise HTTPException(status_code=503, detail="job queue or audit storage is unavailable") from exc
+
+
+@app.post("/v1/remediation/jobs/complete")
+def complete_job(request: JobCompleteRequest) -> dict[str, bool]:
+    try:
+        get_job_queue().complete(job_id=request.job_id, worker_id=request.worker_id, payload=request.job)
+        get_audit_sink().append_event(build_audit_event(request.job, audit_event_id=str(uuid4()), event_type="job_completed", from_status="running", to_status=request.job.status, metadata={"worker_id": request.worker_id}))
+        return {"accepted": True}
+    except (JobQueueError, AuditError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/remediation/jobs/fail")
+def fail_job(request: JobFailRequest) -> dict[str, bool]:
+    try:
+        get_job_queue().fail(job_id=request.job_id, worker_id=request.worker_id, payload=request.job, retry_after_seconds=request.retry_after_seconds)
+        get_audit_sink().append_event(build_audit_event(request.job, audit_event_id=str(uuid4()), event_type="job_requeued", from_status="running", to_status="queued", metadata={"worker_id": request.worker_id, "retry_after_seconds": request.retry_after_seconds}))
+        return {"accepted": True}
+    except (JobQueueError, AuditError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/v1/remediation/dry-run-delivery", response_model=DryRunDelivery)
 def build_delivery(request: DryRunDeliveryRequest) -> DryRunDelivery:
-    """Return the proposed PR artifact without creating a repository side effect."""
     try:
-        return build_dry_run_delivery(
-            request.job,
-            repository=request.repository,
-            summary=request.summary,
-            patch_diff=request.patch_diff,
-        )
+        return build_dry_run_delivery(request.job, repository=request.repository, summary=request.summary, patch_diff=request.patch_diff)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/remediation/github-delivery", response_model=GitHubPullRequest)
 def github_delivery(request: GitHubDeliveryRequest) -> GitHubPullRequest:
-    """Create a GitHub PR through the guarded provider delivery boundary."""
     token = os.environ.get("GITHUB_INSTALLATION_TOKEN", "")
     if not token:
         raise HTTPException(status_code=503, detail="GitHub installation token is not configured")
     try:
         with GitHubDeliveryClient(token) as client:
-            return client.deliver(
-                request.job,
-                repository=request.repository,
-                base_branch=request.base_branch,
-                title=request.title,
-                body=request.body,
-                changes=[GitHubFileChange(path=change.path, content=change.content) for change in request.changes],
-                allow_write=request.allow_write,
-            )
+            return client.deliver(request.job, repository=request.repository, base_branch=request.base_branch, title=request.title, body=request.body, changes=[GitHubFileChange(path=change.path, content=change.content) for change in request.changes], allow_write=request.allow_write)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
