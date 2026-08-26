@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sentinel.models import RemediationJob
 from sentinel.orchestrator import RemediationStatus
+from sentinel.models import RemediationJob
 
 
 MAX_PATCH_CHARS = 128_000
