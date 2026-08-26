@@ -6,7 +6,7 @@ from threading import Event
 from time import monotonic
 from typing import Protocol
 
-from .remediation_worker import RemediationWorkerError
+from .remediation_worker import RemediationWorkerError, RemediationWorkerResult
 
 
 class WorkerRuntimeError(ValueError):
@@ -54,7 +54,7 @@ class WorkerRuntimeStats:
 class WorkerLoop(Protocol):
     """Minimal worker contract required by the runtime supervisor."""
 
-    def run_once(self, *, lease_seconds: int = 300) -> object: ...
+    def run_once(self, *, lease_seconds: int = 300) -> RemediationWorkerResult | None: ...
 
 
 class RemediationWorkerRuntime:
