@@ -11,7 +11,6 @@ from sentinel.github_delivery import (
 from sentinel.models import RemediationJob
 from sentinel.orchestrator import RemediationStatus
 
-
 REPOSITORY = "acme/service"
 
 
