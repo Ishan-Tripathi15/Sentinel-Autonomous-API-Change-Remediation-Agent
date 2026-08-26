@@ -7,6 +7,8 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
+from .audit import AuditError, build_audit_record
+from .audit_runtime import get_audit_sink
 from .blast_radius import build_blast_radius
 from .delivery import DryRunDelivery, build_dry_run_delivery
 from .diff import classify_openapi_changes, diff_openapi
@@ -179,15 +181,24 @@ def analyze_blast_radius(request: BlastRadiusRequest) -> BlastRadiusReport:
 
 @app.post("/v1/remediation/jobs", response_model=RemediationJob)
 def create_job(request: RemediationJobRequest) -> RemediationJob:
-    """Plan a remediation job; MVP remains dry-run and side-effect free."""
+    """Plan a remediation job and persist its initial audit snapshot."""
     try:
-        return create_remediation_job(
+        job = create_remediation_job(
             change_event=request.change_event,
             blast_radius=request.blast_radius,
             organization_id=request.organization_id,
             installation_id=request.installation_id,
             dry_run=request.dry_run,
         )
+        audit = build_audit_record(
+            job,
+            request.change_event,
+            audit_id=str(uuid4()),
+        )
+        get_audit_sink().append(audit)
+        return job
+    except AuditError as exc:
+        raise HTTPException(status_code=503, detail="audit persistence is unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
