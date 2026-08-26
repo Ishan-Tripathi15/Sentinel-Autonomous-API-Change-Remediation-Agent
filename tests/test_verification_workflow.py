@@ -6,8 +6,8 @@ import pytest
 
 from sentinel.models import RemediationJob
 from sentinel.orchestrator import OrchestrationError, RemediationStatus
-from sentinel.verification_workflow import verify_remediation_job
 from sentinel.verification import VerificationError, VerificationResult
+from sentinel.verification_workflow import verify_remediation_job
 
 
 COMMAND = ("python", "-m", "pytest")
