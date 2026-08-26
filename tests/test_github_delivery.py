@@ -3,9 +3,16 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from sentinel.github_delivery import GitHubDeliveryClient, GitHubDeliveryError, GitHubFileChange
+from sentinel.github_delivery import (
+    GitHubDeliveryClient,
+    GitHubDeliveryError,
+    GitHubFileChange,
+)
 from sentinel.models import RemediationJob
 from sentinel.orchestrator import RemediationStatus
+
+
+REPOSITORY = "acme/service"
 
 
 REPOSITORY = "acme/service"
