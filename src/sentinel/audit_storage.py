@@ -165,7 +165,7 @@ class PostgresAuditSink(AuditSink):
 
 def _parse_recorded_at(value: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise AuditError("recorded_at must be an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
