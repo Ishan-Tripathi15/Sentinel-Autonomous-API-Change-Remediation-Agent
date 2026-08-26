@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
-from .audit import AuditError, build_audit_record
+from .audit import AuditError, build_audit_event, build_audit_record
 from .audit_runtime import get_audit_sink
 from .blast_radius import build_blast_radius
 from .delivery import DryRunDelivery, build_dry_run_delivery
@@ -50,6 +50,14 @@ class RemediationJobRequest(BaseModel):
     organization_id: str = Field(min_length=1)
     installation_id: str = Field(min_length=1)
     dry_run: bool = True
+
+
+class RemediationAuditEventRequest(BaseModel):
+    job: RemediationJob
+    event_type: str = Field(min_length=1, max_length=256)
+    from_status: str | None = Field(default=None, max_length=256)
+    to_status: str | None = Field(default=None, max_length=256)
+    metadata: dict[str, object] = Field(default_factory=dict, max_length=32)
 
 
 class RepositorySnapshotRequest(BaseModel):
@@ -132,12 +140,7 @@ def ingest_vendor_event(request: VendorEventRequest) -> ChangeEvent:
 
 @app.post("/v1/github/webhooks")
 def github_webhook(payload: bytes, x_hub_signature_256: str | None = Header(default=None)) -> dict[str, object]:
-    """Authenticate and normalize GitHub App installation events.
-
-    The webhook secret must be supplied through the runtime environment. No
-    repository access is performed here; an authenticated worker will consume
-    the normalized installation/repository data later.
-    """
+    """Authenticate and normalize GitHub App installation events."""
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     if not x_hub_signature_256:
         raise HTTPException(status_code=401, detail="missing GitHub webhook signature")
@@ -181,7 +184,7 @@ def analyze_blast_radius(request: BlastRadiusRequest) -> BlastRadiusReport:
 
 @app.post("/v1/remediation/jobs", response_model=RemediationJob)
 def create_job(request: RemediationJobRequest) -> RemediationJob:
-    """Plan a remediation job and persist its initial audit snapshot."""
+    """Plan a remediation job and persist its initial audit snapshot and event."""
     try:
         job = create_remediation_job(
             change_event=request.change_event,
@@ -190,17 +193,39 @@ def create_job(request: RemediationJobRequest) -> RemediationJob:
             installation_id=request.installation_id,
             dry_run=request.dry_run,
         )
-        audit = build_audit_record(
-            job,
-            request.change_event,
-            audit_id=str(uuid4()),
+        sink = get_audit_sink()
+        sink.append(build_audit_record(job, request.change_event, audit_id=str(uuid4())))
+        sink.append_event(
+            build_audit_event(
+                job,
+                audit_event_id=str(uuid4()),
+                event_type="job_created",
+                to_status=job.status,
+            )
         )
-        get_audit_sink().append(audit)
         return job
     except AuditError as exc:
         raise HTTPException(status_code=503, detail="audit persistence is unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/remediation/jobs/events")
+def append_remediation_event(request: RemediationAuditEventRequest) -> dict[str, object]:
+    """Append a lifecycle transition emitted by a remediation worker."""
+    try:
+        event = build_audit_event(
+            request.job,
+            audit_event_id=str(uuid4()),
+            event_type=request.event_type,
+            from_status=request.from_status,
+            to_status=request.to_status,
+            metadata=request.metadata,
+        )
+        get_audit_sink().append_event(event)
+        return {"accepted": True, "audit_event_id": event.audit_event_id}
+    except AuditError as exc:
+        raise HTTPException(status_code=503, detail="audit persistence is unavailable") from exc
 
 
 @app.post("/v1/remediation/dry-run-delivery", response_model=DryRunDelivery)
