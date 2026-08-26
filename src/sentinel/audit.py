@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
-from collections.abc import Mapping
 
 from sentinel.models import ChangeEvent, RemediationJob
 
