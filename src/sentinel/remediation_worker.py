@@ -66,7 +66,7 @@ class RemediationWorker:
             try:
                 self._emit(failed, "job_failed", from_status="running", to_status=failed.status, metadata={"error_type": type(exc).__name__})
                 self._queue.fail(job_id=failed.job_id, worker_id=self._worker_id, payload=retry_payload)
-            except Exception as cleanup_exc:  # noqa: BLE001 - failure handling must surface a single safe error
+            except Exception as cleanup_exc:
                 raise RemediationWorkerError("worker failed and could not persist failure state") from cleanup_exc
             return RemediationWorkerResult(job=failed, completed=False)
 
