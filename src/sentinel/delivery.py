@@ -53,7 +53,7 @@ def build_dry_run_delivery(
         raise DeliveryError("delivery summary is required")
     if not patch_diff.strip():
         raise DeliveryError("patch diff is required for delivery")
-    if any(char == "\x00" for char in (repository, summary, patch_diff)):
+    if any("\x00" in value for value in (repository, summary, patch_diff)):
         raise DeliveryError("delivery fields must not contain null bytes")
 
     if len(patch_diff) > MAX_PATCH_CHARS:
