@@ -73,6 +73,7 @@ class RemediationWorker:
             return WorkerResult(job=current, completed=True)
         except (JobQueueError, OrchestrationError, WorkerError, ValueError) as exc:
             failed = original.model_copy(update={"status": RemediationStatus.FAILED.value})
+            retry_payload = failed.model_copy(update={"status": RemediationStatus.QUEUED.value})
             try:
                 self._emit(
                     failed,
@@ -84,7 +85,7 @@ class RemediationWorker:
                 self._queue.fail(
                     job_id=failed.job_id,
                     worker_id=self._worker_id,
-                    payload=failed,
+                    payload=retry_payload,
                 )
             except JobQueueError as cleanup_exc:
                 raise WorkerError("worker failed and could not persist failure state") from cleanup_exc
