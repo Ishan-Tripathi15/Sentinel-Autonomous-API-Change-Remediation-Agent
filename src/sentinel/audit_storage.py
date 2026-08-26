@@ -5,7 +5,7 @@ from datetime import datetime
 from os import environ
 from typing import Any
 
-from psycopg import Connection, Error, OperationalError
+from psycopg import Error, OperationalError
 from psycopg.rows import tuple_row
 from psycopg_pool import ConnectionPool
 
