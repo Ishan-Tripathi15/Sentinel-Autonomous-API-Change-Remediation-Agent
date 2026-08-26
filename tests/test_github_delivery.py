@@ -15,8 +15,6 @@ from sentinel.orchestrator import RemediationStatus
 REPOSITORY = "acme/service"
 
 
-REPOSITORY = "acme/service"
-
 
 def make_job(*, status: str = RemediationStatus.VERIFIED.value, dry_run: bool = False) -> RemediationJob:
     return RemediationJob(
