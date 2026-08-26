@@ -22,7 +22,11 @@ class RemediationRunResult:
 class RemediationOrchestrator:
     """Run diagnosis through approved tools without executing verification commands."""
 
-    def __init__(self, llm: StructuredLLMAdapter, executor: PolicyGatedToolExecutor) -> None:
+    def __init__(
+        self,
+        llm: StructuredLLMAdapter,
+        executor: PolicyGatedToolExecutor,
+    ) -> None:
         self._llm = llm
         self._executor = executor
 
