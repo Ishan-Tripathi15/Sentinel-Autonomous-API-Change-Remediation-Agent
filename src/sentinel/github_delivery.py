@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote
 
 import httpx
@@ -71,7 +71,7 @@ class GitHubDeliveryClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> GitHubDeliveryClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
