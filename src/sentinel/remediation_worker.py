@@ -7,7 +7,7 @@ from uuid import uuid4
 from .audit import AuditSink, build_audit_event
 from .job_queue import JobQueueError, PostgresJobQueue
 from .models import RemediationJob
-from .orchestrator import OrchestrationError, RemediationStatus, transition_job
+from .orchestrator import RemediationStatus, transition_job
 
 
 class RemediationWorkerError(RuntimeError):
@@ -30,16 +30,7 @@ class RemediationWorker:
     customer code and never performs repository writes itself.
     """
 
-    def __init__(
-        self,
-        queue: PostgresJobQueue,
-        audit: AuditSink,
-        *,
-        worker_id: str,
-        prepare: StageHandler,
-        generate_patch: StageHandler,
-        verify: StageHandler,
-    ) -> None:
+    def __init__(self, queue: PostgresJobQueue, audit: AuditSink, *, worker_id: str, prepare: StageHandler, generate_patch: StageHandler, verify: StageHandler) -> None:
         if not worker_id.strip():
             raise RemediationWorkerError("worker_id is required")
         self._queue = queue
@@ -57,7 +48,6 @@ class RemediationWorker:
             raise RemediationWorkerError(str(exc)) from exc
         if job is None:
             return None
-
         original = job
         try:
             self._emit(original, "job_claimed", from_status="queued", to_status="running")
@@ -70,19 +60,13 @@ class RemediationWorker:
             self._emit(current, "job_completed", from_status="verified", to_status=current.status)
             self._queue.complete(job_id=current.job_id, worker_id=self._worker_id, payload=current)
             return RemediationWorkerResult(job=current, completed=True)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - worker boundary must requeue every stage failure safely
             failed = original.model_copy(update={"status": RemediationStatus.FAILED.value})
             retry_payload = failed.model_copy(update={"status": RemediationStatus.QUEUED.value})
             try:
-                self._emit(
-                    failed,
-                    "job_failed",
-                    from_status="running",
-                    to_status=failed.status,
-                    metadata={"error_type": type(exc).__name__},
-                )
+                self._emit(failed, "job_failed", from_status="running", to_status=failed.status, metadata={"error_type": type(exc).__name__})
                 self._queue.fail(job_id=failed.job_id, worker_id=self._worker_id, payload=retry_payload)
-            except Exception as cleanup_exc:
+            except Exception as cleanup_exc:  # noqa: BLE001 - failure handling must surface a single safe error
                 raise RemediationWorkerError("worker failed and could not persist failure state") from cleanup_exc
             return RemediationWorkerResult(job=failed, completed=False)
 
@@ -99,22 +83,5 @@ class RemediationWorker:
         self._emit(updated, "stage_completed", from_status=job.status, to_status=updated.status)
         return updated
 
-    def _emit(
-        self,
-        job: RemediationJob,
-        event_type: str,
-        *,
-        from_status: str | None = None,
-        to_status: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> None:
-        self._audit.append_event(
-            build_audit_event(
-                job,
-                audit_event_id=str(uuid4()),
-                event_type=event_type,
-                from_status=from_status,
-                to_status=to_status,
-                metadata=metadata,
-            )
-        )
+    def _emit(self, job: RemediationJob, event_type: str, *, from_status: str | None = None, to_status: str | None = None, metadata: dict[str, object] | None = None) -> None:
+        self._audit.append_event(build_audit_event(job, audit_event_id=str(uuid4()), event_type=event_type, from_status=from_status, to_status=to_status, metadata=metadata))
