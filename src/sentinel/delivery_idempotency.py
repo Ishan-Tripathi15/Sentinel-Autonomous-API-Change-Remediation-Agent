@@ -29,13 +29,22 @@ class DeliveryAttempt:
     commit_sha: str | None = None
 
 
-def build_delivery_key(job: RemediationJob) -> str:
-    """Build a stable key from immutable remediation identity."""
+def build_delivery_key(
+    job: RemediationJob,
+    *,
+    provider: str,
+    repository: str,
+    base_branch: str,
+) -> str:
+    """Build a stable key from every immutable delivery identity input."""
     material = {
         "job_id": job.job_id,
         "organization_id": job.organization_id,
         "installation_id": job.installation_id,
         "change_event_id": job.change_event_id,
+        "provider": provider,
+        "repository": repository,
+        "base_branch": base_branch,
     }
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -64,7 +73,12 @@ class DeliveryAttemptStore:
         if not 1 <= lease_seconds <= 3600:
             raise DeliveryIdempotencyError("lease_seconds must be between 1 and 3600")
 
-        key = build_delivery_key(job)
+        key = build_delivery_key(
+            job,
+            provider=provider,
+            repository=repository,
+            base_branch=base_branch,
+        )
         with self._pool.connection() as conn:
             try:
                 row = conn.execute(
