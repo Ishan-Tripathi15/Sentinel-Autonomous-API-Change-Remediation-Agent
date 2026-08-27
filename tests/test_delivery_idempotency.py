@@ -13,7 +13,6 @@ from sentinel.delivery_idempotency import (
 )
 from sentinel.models import RemediationJob
 
-
 REPOSITORY = "acme/api"
 BASE_BRANCH = "main"
 PROVIDER = "github"
