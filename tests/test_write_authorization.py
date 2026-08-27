@@ -87,7 +87,7 @@ def test_expired_authorization_is_rejected() -> None:
         make_job(),
         repository="acme/service",
         base_branch="main",
-        now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
+        now=datetime(2026, 8, 28, 12, 0, 30, tzinfo=UTC),
     )
     with pytest.raises(WriteAuthorizationError, match="expired"):
         authorization.validate_for(
