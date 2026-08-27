@@ -74,7 +74,10 @@ def test_authorization_binds_job_and_repository_identity() -> None:
 
     with pytest.raises(WriteAuthorizationError, match="repository"):
         authorization.validate_for(
-            job, repository="acme/other", base_branch="main", now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC)
+            job,
+            repository="acme/other",
+            base_branch="main",
+            now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
         )
 
 
@@ -107,13 +110,14 @@ def test_authorization_cannot_activate_after_expiry() -> None:
 
 
 def test_authorization_requires_timezone_aware_timestamp() -> None:
+    naive_timestamp = datetime(2026, 8, 28, 12, tzinfo=UTC).replace(tzinfo=None)
     with pytest.raises(WriteAuthorizationError, match="timezone-aware"):
         RepositoryWriteAuthorization.issue(
             make_job(),
             repository="acme/service",
             base_branch="main",
             authorized_by="policy-engine",
-            authorized_at=datetime(2026, 8, 28, 12),
+            authorized_at=naive_timestamp,
         )
 
 
