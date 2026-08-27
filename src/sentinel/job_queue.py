@@ -162,7 +162,7 @@ class PostgresJobQueue:
             raise JobQueueError("approval release failed") from exc
 
     def checkpoint(self, *, job_id: str, worker_id: str, payload: RemediationJob) -> None:
-        """Persist completed stage progress while retaining the worker lease."""
+        """Persist completed stage progress only while the worker still owns a live lease."""
         if not job_id.strip() or not worker_id.strip():
             raise JobQueueError("job_id and worker_id are required")
         if payload.job_id != job_id:
@@ -190,7 +190,11 @@ class PostgresJobQueue:
             raise JobQueueError("job checkpoint failed") from exc
 
     def complete(self, *, job_id: str, worker_id: str, payload: RemediationJob) -> None:
-        """Complete a lease owned by this worker."""
+        """Complete a job only while the worker still owns a live lease."""
+        if payload.job_id != job_id:
+            raise JobQueueError("completion job identity does not match job_id")
+        if payload.status not in {"dry-run-complete", "completed"}:
+            raise JobQueueError("completion requires a terminal workflow status")
         self._update_owned(job_id, worker_id, payload, payload.status, None)
 
     def fail(
@@ -201,7 +205,9 @@ class PostgresJobQueue:
         payload: RemediationJob,
         retry_after_seconds: int = 30,
     ) -> None:
-        """Return a failed job to the queue with bounded retry delay."""
+        """Return a failed job to the queue only while the worker still owns a live lease."""
+        if payload.job_id != job_id:
+            raise JobQueueError("failure job identity does not match job_id")
         if retry_after_seconds < 0 or retry_after_seconds > 3600:
             raise JobQueueError("retry_after_seconds must be between 0 and 3600")
         self._update_owned(job_id, worker_id, payload, "queued", retry_after_seconds)
@@ -224,7 +230,10 @@ class PostgresJobQueue:
                         UPDATE remediation_jobs
                         SET status = %s, payload = %s::jsonb, worker_id = NULL,
                             lease_until = NULL, updated_at = CURRENT_TIMESTAMP
-                        WHERE job_id = %s AND worker_id = %s
+                        WHERE job_id = %s
+                          AND worker_id = %s
+                          AND status = 'running'
+                          AND lease_until >= CURRENT_TIMESTAMP
                         """,
                         (status, json.dumps(payload.model_dump(mode="json")), job_id, worker_id),
                     )
@@ -236,7 +245,10 @@ class PostgresJobQueue:
                             lease_until = NULL,
                             available_at = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE job_id = %s AND worker_id = %s
+                        WHERE job_id = %s
+                          AND worker_id = %s
+                          AND status = 'running'
+                          AND lease_until >= CURRENT_TIMESTAMP
                         """,
                         (
                             status,

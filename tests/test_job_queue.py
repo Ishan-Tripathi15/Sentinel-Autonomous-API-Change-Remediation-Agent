@@ -56,7 +56,7 @@ def test_claim_and_complete_requires_lease_owner(queue: PostgresJobQueue) -> Non
         queue.complete(
             job_id=value.job_id,
             worker_id="worker-b",
-            payload=value.model_copy(update={"status": "verified"}),
+            payload=value.model_copy(update={"status": "dry-run-complete"}),
         )
 
     completed = value.model_copy(update={"status": "dry-run-complete"})
@@ -99,6 +99,63 @@ def test_checkpoint_requires_lease_owner(queue: PostgresJobQueue) -> None:
 
     with pytest.raises(JobQueueError, match="not owned"):
         queue.checkpoint(job_id=value.job_id, worker_id="worker-b", payload=checkpoint)
+
+
+def test_checkpoint_rejects_expired_lease(queue: PostgresJobQueue) -> None:
+    value = job()
+    queue.enqueue(value)
+    assert queue.claim(worker_id="worker-a", lease_seconds=1) == value
+
+    with psycopg.connect(_DATABASE_URL) as connection:
+        connection.execute(
+            "UPDATE remediation_jobs SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE job_id = %s",
+            (value.job_id,),
+        )
+
+    checkpoint = value.model_copy(update={"status": "patch-generated"})
+    with pytest.raises(JobQueueError, match="not owned"):
+        queue.checkpoint(job_id=value.job_id, worker_id="worker-a", payload=checkpoint)
+
+
+def test_complete_rejects_expired_lease(queue: PostgresJobQueue) -> None:
+    value = job()
+    queue.enqueue(value)
+    assert queue.claim(worker_id="worker-a", lease_seconds=1) == value
+
+    with psycopg.connect(_DATABASE_URL) as connection:
+        connection.execute(
+            "UPDATE remediation_jobs SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE job_id = %s",
+            (value.job_id,),
+        )
+
+    completed = value.model_copy(update={"status": "dry-run-complete"})
+    with pytest.raises(JobQueueError, match="not owned"):
+        queue.complete(job_id=value.job_id, worker_id="worker-a", payload=completed)
+
+
+def test_expired_worker_cannot_requeue_after_reclaim(queue: PostgresJobQueue) -> None:
+    value = job()
+    queue.enqueue(value)
+    assert queue.claim(worker_id="worker-a", lease_seconds=1) == value
+
+    with psycopg.connect(_DATABASE_URL) as connection:
+        connection.execute(
+            "UPDATE remediation_jobs SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE job_id = %s",
+            (value.job_id,),
+        )
+
+    reclaimed = queue.claim(worker_id="worker-b", lease_seconds=300)
+    assert reclaimed is not None
+
+    with pytest.raises(JobQueueError, match="not owned"):
+        queue.fail(
+            job_id=value.job_id,
+            worker_id="worker-a",
+            payload=value.model_copy(update={"status": "failed"}),
+            retry_after_seconds=0,
+        )
+
+    assert queue.claim(worker_id="worker-c") is None
 
 
 def test_checkpoint_rejects_identity_mismatch(queue: PostgresJobQueue) -> None:
