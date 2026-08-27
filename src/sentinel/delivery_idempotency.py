@@ -53,27 +53,37 @@ class DeliveryAttemptStore:
         job: RemediationJob,
         provider: str,
         owner: str,
+        repository: str,
+        base_branch: str,
         lease_seconds: int = 300,
     ) -> DeliveryAttempt:
+        if not provider.strip() or not owner.strip():
+            raise DeliveryIdempotencyError("provider and owner are required")
+        if not repository.strip() or not base_branch.strip():
+            raise DeliveryIdempotencyError("repository and base branch are required")
+        if not 1 <= lease_seconds <= 3600:
+            raise DeliveryIdempotencyError("lease_seconds must be between 1 and 3600")
+
         key = build_delivery_key(job)
         with self._pool.connection() as conn:
             try:
                 row = conn.execute(
                     """
                     INSERT INTO remediation_delivery_attempts
-                        (delivery_key, job_id, provider, status, delivery_owner, lease_until)
-                    VALUES (%s, %s, %s, 'pending', %s,
+                        (delivery_key, job_id, organization_id, installation_id,
+                         repository, base_branch, provider, status, delivery_owner, lease_until)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s,
                             CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'))
                     ON CONFLICT (delivery_key) DO UPDATE SET
                         delivery_owner = CASE
-                            WHEN remediation_delivery_attempts.status = 'pending'
+                            WHEN remediation_delivery_attempts.status IN ('pending', 'in_progress')
                              AND (remediation_delivery_attempts.lease_until IS NULL
                                   OR remediation_delivery_attempts.lease_until < CURRENT_TIMESTAMP)
                             THEN EXCLUDED.delivery_owner
                             ELSE remediation_delivery_attempts.delivery_owner
                         END,
                         lease_until = CASE
-                            WHEN remediation_delivery_attempts.status = 'pending'
+                            WHEN remediation_delivery_attempts.status IN ('pending', 'in_progress')
                              AND (remediation_delivery_attempts.lease_until IS NULL
                                   OR remediation_delivery_attempts.lease_until < CURRENT_TIMESTAMP)
                             THEN EXCLUDED.lease_until
@@ -82,7 +92,17 @@ class DeliveryAttemptStore:
                     RETURNING delivery_key, job_id, status, provider, delivery_owner,
                               lease_until, pull_request_number, pull_request_url, commit_sha
                     """,
-                    (key, job.job_id, provider, owner, lease_seconds),
+                    (
+                        key,
+                        job.job_id,
+                        job.organization_id,
+                        job.installation_id,
+                        repository,
+                        base_branch,
+                        provider,
+                        owner,
+                        lease_seconds,
+                    ),
                 ).fetchone()
                 conn.commit()
             except Error as exc:
@@ -92,9 +112,35 @@ class DeliveryAttemptStore:
         if row is None:
             raise DeliveryIdempotencyError("delivery intent was not returned")
         attempt = DeliveryAttempt(**dict(row))
-        if attempt.status == "pending" and attempt.delivery_owner != owner:
+        if attempt.status in {"pending", "in_progress"} and attempt.delivery_owner != owner:
             raise DeliveryIdempotencyError("delivery intent is owned by another worker")
         return attempt
+
+    def begin(self, *, delivery_key: str, owner: str, lease_seconds: int = 300) -> DeliveryAttempt:
+        if not owner.strip():
+            raise DeliveryIdempotencyError("owner is required")
+        if not 1 <= lease_seconds <= 3600:
+            raise DeliveryIdempotencyError("lease_seconds must be between 1 and 3600")
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """
+                UPDATE remediation_delivery_attempts
+                SET status = 'in_progress',
+                    lease_until = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE delivery_key = %s
+                  AND status = 'pending'
+                  AND delivery_owner = %s
+                  AND (lease_until IS NULL OR lease_until >= CURRENT_TIMESTAMP)
+                RETURNING delivery_key, job_id, status, provider, delivery_owner,
+                          lease_until, pull_request_number, pull_request_url, commit_sha
+                """,
+                (lease_seconds, delivery_key, owner),
+            ).fetchone()
+            conn.commit()
+        if row is None:
+            raise DeliveryIdempotencyError("delivery intent could not be started")
+        return DeliveryAttempt(**dict(row))
 
     def record_result(
         self,
@@ -154,7 +200,7 @@ class DeliveryAttemptStore:
                     completed_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE delivery_key = %s
-                  AND status = 'pending'
+                  AND status = 'in_progress'
                   AND delivery_owner = %s
                   AND (lease_until IS NULL OR lease_until >= CURRENT_TIMESTAMP)
                 RETURNING delivery_key, job_id, status, provider, delivery_owner,
