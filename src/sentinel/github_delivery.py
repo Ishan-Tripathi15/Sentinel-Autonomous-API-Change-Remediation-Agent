@@ -74,7 +74,6 @@ class GitHubDeliveryClient:
         self._client.close()
 
     def __enter__(self) -> Self:
-        self._thread = None
         return self
 
     def __exit__(self, *_args: object) -> None:
