@@ -11,6 +11,7 @@ from sentinel.models import RemediationJob
 from sentinel.orchestrator import RemediationStatus
 
 from .delivery_reconciliation import RemoteDelivery
+from .write_authorization import RepositoryWriteAuthorization, WriteAuthorizationError
 
 _MAX_FILES = 32
 _MAX_FILE_CHARS = 64_000
@@ -130,7 +131,7 @@ class GitHubDeliveryClient:
         title: str,
         body: str,
         changes: list[GitHubFileChange],
-        allow_write: bool,
+        authorization: RepositoryWriteAuthorization,
     ) -> GitHubPullRequest:
         """Create a branch and PR only after all write gates have passed."""
         self.validate_request(
@@ -140,7 +141,7 @@ class GitHubDeliveryClient:
             title=title,
             body=body,
             changes=changes,
-            allow_write=allow_write,
+            authorization=authorization,
         )
 
         owner, repo = repository.split("/", 1)
@@ -180,11 +181,7 @@ class GitHubDeliveryClient:
         commit = self._request(
             "POST",
             f"/repos/{owner}/{repo}/git/commits",
-            json={
-                "message": title,
-                "tree": tree_sha,
-                "parents": [base_sha],
-            },
+            json={"message": title, "tree": tree_sha, "parents": [base_sha]},
         )
         commit_sha = self._string_field(commit, "sha")
         self._request(
@@ -195,23 +192,13 @@ class GitHubDeliveryClient:
         pull = self._request(
             "POST",
             f"/repos/{owner}/{repo}/pulls",
-            json={
-                "title": title,
-                "body": body,
-                "head": branch_name,
-                "base": base_branch,
-            },
+            json={"title": title, "body": body, "head": branch_name, "base": base_branch},
         )
         number = pull.get("number")
         url = pull.get("html_url")
         if not isinstance(number, int) or not isinstance(url, str):
             raise GitHubDeliveryError("GitHub returned an invalid pull request response")
-        return GitHubPullRequest(
-            number=number,
-            url=url,
-            branch_name=branch_name,
-            commit_sha=commit_sha,
-        )
+        return GitHubPullRequest(number=number, url=url, branch_name=branch_name, commit_sha=commit_sha)
 
     @staticmethod
     def validate_request(
@@ -222,10 +209,12 @@ class GitHubDeliveryClient:
         title: str,
         body: str,
         changes: list[GitHubFileChange],
-        allow_write: bool,
+        authorization: RepositoryWriteAuthorization,
     ) -> None:
-        if not allow_write:
-            raise GitHubDeliveryError("GitHub repository writes require explicit allow_write=true")
+        try:
+            authorization.validate_for(job, repository=repository, base_branch=base_branch)
+        except WriteAuthorizationError as exc:
+            raise GitHubDeliveryError(str(exc)) from exc
         if job.status != RemediationStatus.VERIFIED.value:
             raise GitHubDeliveryError("only verified remediation jobs can be delivered")
         if job.dry_run:
