@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
-from sentinel.delivery_idempotency import DeliveryAttempt, DeliveryAttemptStore, build_delivery_key
+import pytest
+
+from sentinel.delivery_idempotency import (
+    DeliveryAttempt,
+    DeliveryAttemptStore,
+    DeliveryIdempotencyError,
+    build_delivery_key,
+)
 from sentinel.models import RemediationJob
 
 
@@ -15,6 +23,13 @@ def make_job(*, job_id: str = "job-1") -> RemediationJob:
         status="verified",
         dry_run=False,
     )
+
+
+def make_store() -> tuple[DeliveryAttemptStore, MagicMock, MagicMock]:
+    pool = MagicMock()
+    connection = MagicMock()
+    pool.connection.return_value.__enter__.return_value = connection
+    return DeliveryAttemptStore(pool), pool, connection
 
 
 def test_delivery_key_is_stable_for_same_delivery_identity() -> None:
@@ -42,6 +57,7 @@ def test_delivery_attempt_contains_persisted_provider_result() -> None:
         lease_until=lease_until,
         pull_request_number=123,
         pull_request_url="https://github.com/acme/api/pull/123",
+        commit_sha="abc123",
     )
 
     assert attempt.status == "succeeded"
@@ -50,8 +66,50 @@ def test_delivery_attempt_contains_persisted_provider_result() -> None:
     assert attempt.lease_until == lease_until
     assert attempt.pull_request_number == 123
     assert attempt.pull_request_url.endswith("/123")
+    assert attempt.commit_sha == "abc123"
 
 
-def test_store_requires_a_connection_pool() -> None:
-    store = DeliveryAttemptStore
-    assert store is not None
+def test_record_reconciled_result_persists_remote_commit_and_pr() -> None:
+    store, _, connection = make_store()
+    connection.execute.return_value.fetchone.return_value = {
+        "delivery_key": "key",
+        "job_id": "job-1",
+        "status": "succeeded",
+        "provider": "github",
+        "delivery_owner": "worker-1",
+        "lease_until": None,
+        "pull_request_number": 123,
+        "pull_request_url": "https://github.com/acme/api/pull/123",
+        "commit_sha": "abc123",
+    }
+
+    result = store.record_reconciled_result(
+        delivery_key="key",
+        owner="worker-1",
+        pull_request_number=123,
+        pull_request_url="https://github.com/acme/api/pull/123",
+        commit_sha="abc123",
+    )
+
+    assert result.status == "succeeded"
+    assert result.pull_request_number == 123
+    assert result.commit_sha == "abc123"
+    connection.commit.assert_called_once()
+    sql = connection.execute.call_args.args[0]
+    assert "commit_sha = %s" in sql
+    assert "delivery_owner = %s" in sql
+
+
+def test_record_reconciled_result_requires_commit_sha() -> None:
+    store, pool, _ = make_store()
+
+    with pytest.raises(DeliveryIdempotencyError, match="commit SHA"):
+        store.record_reconciled_result(
+            delivery_key="key",
+            owner="worker-1",
+            pull_request_number=123,
+            pull_request_url="https://github.com/acme/api/pull/123",
+            commit_sha="",
+        )
+
+    pool.connection.assert_not_called()

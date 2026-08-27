@@ -26,6 +26,7 @@ class DeliveryAttempt:
     lease_until: datetime | None = None
     pull_request_number: int | None = None
     pull_request_url: str | None = None
+    commit_sha: str | None = None
 
 
 def build_delivery_key(job: RemediationJob) -> str:
@@ -79,7 +80,7 @@ class DeliveryAttemptStore:
                             ELSE remediation_delivery_attempts.lease_until
                         END
                     RETURNING delivery_key, job_id, status, provider, delivery_owner,
-                              lease_until, pull_request_number, pull_request_url
+                              lease_until, pull_request_number, pull_request_url, commit_sha
                     """,
                     (key, job.job_id, provider, owner, lease_seconds),
                 ).fetchone()
@@ -102,6 +103,44 @@ class DeliveryAttemptStore:
         owner: str,
         pull_request_number: int,
         pull_request_url: str,
+        commit_sha: str | None = None,
+    ) -> DeliveryAttempt:
+        return self._record_success(
+            delivery_key=delivery_key,
+            owner=owner,
+            pull_request_number=pull_request_number,
+            pull_request_url=pull_request_url,
+            commit_sha=commit_sha,
+        )
+
+    def record_reconciled_result(
+        self,
+        *,
+        delivery_key: str,
+        owner: str,
+        pull_request_number: int,
+        pull_request_url: str,
+        commit_sha: str,
+    ) -> DeliveryAttempt:
+        """Persist a provider-discovered result after an ambiguous external call."""
+        if not commit_sha:
+            raise DeliveryIdempotencyError("reconciled result requires a commit SHA")
+        return self._record_success(
+            delivery_key=delivery_key,
+            owner=owner,
+            pull_request_number=pull_request_number,
+            pull_request_url=pull_request_url,
+            commit_sha=commit_sha,
+        )
+
+    def _record_success(
+        self,
+        *,
+        delivery_key: str,
+        owner: str,
+        pull_request_number: int,
+        pull_request_url: str,
+        commit_sha: str | None,
     ) -> DeliveryAttempt:
         with self._pool.connection() as conn:
             row = conn.execute(
@@ -110,16 +149,24 @@ class DeliveryAttemptStore:
                 SET status = 'succeeded',
                     pull_request_number = %s,
                     pull_request_url = %s,
+                    commit_sha = %s,
                     lease_until = NULL,
+                    completed_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE delivery_key = %s
                   AND status = 'pending'
                   AND delivery_owner = %s
                   AND (lease_until IS NULL OR lease_until >= CURRENT_TIMESTAMP)
                 RETURNING delivery_key, job_id, status, provider, delivery_owner,
-                          lease_until, pull_request_number, pull_request_url
+                          lease_until, pull_request_number, pull_request_url, commit_sha
                 """,
-                (pull_request_number, pull_request_url, delivery_key, owner),
+                (
+                    pull_request_number,
+                    pull_request_url,
+                    commit_sha,
+                    delivery_key,
+                    owner,
+                ),
             ).fetchone()
             conn.commit()
         if row is None:
