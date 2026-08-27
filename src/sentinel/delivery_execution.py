@@ -3,14 +3,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .delivery_idempotency import (
-    DeliveryAttempt,
-    DeliveryAttemptStore,
-    DeliveryIdempotencyError,
-)
+from .delivery_idempotency import DeliveryAttempt, DeliveryAttemptStore, DeliveryIdempotencyError
 from .delivery_reconciliation import DeliveryReconciler, DeliveryReconciliationError
 from .github_delivery import GitHubDeliveryClient, GitHubFileChange
 from .models import RemediationJob
+from .write_authorization import RepositoryWriteAuthorization, WriteAuthorizationError
 
 
 class DeliveryExecutionError(RuntimeError):
@@ -28,7 +25,7 @@ class DeliveryExecutionResult:
 
 
 class GitHubDeliveryExecutor:
-    """Fence GitHub delivery with durable ownership and reconciliation."""
+    """Fence GitHub delivery with authorization, durable ownership, and reconciliation."""
 
     def __init__(
         self,
@@ -58,10 +55,11 @@ class GitHubDeliveryExecutor:
         title: str,
         body: str,
         changes: Sequence[GitHubFileChange],
-        allow_write: bool,
+        authorization: RepositoryWriteAuthorization,
     ) -> DeliveryExecutionResult:
         change_list = list(changes)
         try:
+            authorization.validate_for(job, repository=repository, base_branch=base_branch)
             self._client.validate_request(
                 job,
                 repository=repository,
@@ -69,9 +67,9 @@ class GitHubDeliveryExecutor:
                 title=title,
                 body=body,
                 changes=change_list,
-                allow_write=allow_write,
+                authorization=authorization,
             )
-        except ValueError as exc:
+        except (ValueError, WriteAuthorizationError) as exc:
             raise DeliveryExecutionError(str(exc)) from exc
 
         try:
@@ -110,7 +108,7 @@ class GitHubDeliveryExecutor:
                 title=title,
                 body=body,
                 changes=change_list,
-                allow_write=allow_write,
+                authorization=authorization,
             )
         except Exception as exc:
             raise DeliveryExecutionError(
