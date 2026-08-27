@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event, Thread
+from typing import Self
 from uuid import uuid4
 
 from .audit import AuditSink, build_audit_event
@@ -47,7 +48,7 @@ class _LeaseHeartbeat:
             daemon=True,
         )
 
-    def __enter__(self) -> "_LeaseHeartbeat":
+    def __enter__(self) -> Self:
         self._thread.start()
         return self
 
