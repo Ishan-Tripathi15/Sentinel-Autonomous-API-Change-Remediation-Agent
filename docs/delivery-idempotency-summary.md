@@ -1,0 +1,1 @@
+Phase 5 delivery identity is now represented durably by a deterministic key and a provider result record. This PR deliberately stops short of autonomous repository writes until the external GitHub delivery gap has deterministic recovery semantics.

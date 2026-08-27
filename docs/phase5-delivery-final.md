@@ -1,0 +1,1 @@
+This branch contains the durable delivery idempotency persistence layer and its identity tests. It intentionally does not enable autonomous repository writes until external-provider recovery is deterministic.

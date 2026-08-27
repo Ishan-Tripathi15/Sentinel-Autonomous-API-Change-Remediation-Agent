@@ -1,0 +1,1 @@
+Phase 5 delivery hardening: durable delivery identity is separated from workflow state, and provider results are persisted for retry/recovery. Autonomous repository mutation remains gated until the provider-side external-operation recovery path is deterministic.
