@@ -5,8 +5,10 @@ CREATE TABLE IF NOT EXISTS remediation_delivery_attempts (
     installation_id TEXT NOT NULL,
     repository TEXT NOT NULL,
     base_branch TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'succeeded', 'failed')),
     provider TEXT NOT NULL,
+    delivery_owner TEXT,
+    lease_until TIMESTAMPTZ,
     pull_request_number INTEGER,
     pull_request_url TEXT,
     commit_sha TEXT,
@@ -23,3 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_attempts_job
 
 CREATE INDEX IF NOT EXISTS idx_delivery_attempts_status
     ON remediation_delivery_attempts (status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_lease
+    ON remediation_delivery_attempts (status, lease_until)
+    WHERE status = 'in_progress';
