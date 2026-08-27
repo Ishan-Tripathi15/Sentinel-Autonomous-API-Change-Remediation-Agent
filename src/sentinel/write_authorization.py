@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
+
+from psycopg_pool import ConnectionPool
 
 from .models import RemediationJob
 
@@ -116,7 +119,7 @@ class RepositoryWriteAuthorization:
 class WriteAuthorizationStore:
     """Durable PostgreSQL repository-write authorization store."""
 
-    def __init__(self, pool) -> None:
+    def __init__(self, pool: ConnectionPool[Any]) -> None:
         self._pool = pool
 
     def issue(self, authorization: RepositoryWriteAuthorization) -> RepositoryWriteAuthorization:
@@ -179,14 +182,7 @@ class WriteAuthorizationStore:
                 ORDER BY authorized_at DESC
                 LIMIT 1
                 """,
-                (
-                    job.job_id,
-                    job.organization_id,
-                    job.installation_id,
-                    repository,
-                    base_branch,
-                    current,
-                ),
+                (job.job_id, job.organization_id, job.installation_id, repository, base_branch, current),
             ).fetchone()
         if row is None:
             return None
