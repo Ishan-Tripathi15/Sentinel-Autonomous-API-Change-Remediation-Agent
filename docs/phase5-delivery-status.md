@@ -1,0 +1,1 @@
+Current delivery hardening checkpoint: durable idempotency key and delivery-attempt persistence are implemented. Provider-side recovery across the external GitHub operation remains before autonomous repository writes.
