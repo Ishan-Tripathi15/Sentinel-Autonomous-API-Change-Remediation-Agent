@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from .models import RemediationJob
@@ -57,9 +57,7 @@ class RepositoryWriteAuthorization:
             authorized_by=authorized_by,
             policy_version=policy_version,
             authorized_at=now,
-            expires_at=now.timestamp() and datetime.fromtimestamp(
-                now.timestamp() + ttl_seconds, tz=UTC
-            ),
+            expires_at=now + timedelta(seconds=ttl_seconds),
         )
 
     def validate_for(
@@ -87,6 +85,32 @@ class RepositoryWriteAuthorization:
             raise WriteAuthorizationError("repository-write authorization has expired")
         if self.authorized_at > current:
             raise WriteAuthorizationError("repository-write authorization is not yet active")
+
+    def activate_job(
+        self,
+        job: RemediationJob,
+        *,
+        repository: str,
+        base_branch: str,
+        now: datetime | None = None,
+    ) -> RemediationJob:
+        """Cross the write gate while preserving every immutable job identity field."""
+        current = now or datetime.now(UTC)
+        if current.tzinfo is None:
+            raise WriteAuthorizationError("validation timestamp must be timezone-aware")
+        if self.job_id != job.job_id:
+            raise WriteAuthorizationError("authorization does not belong to this job")
+        if self.organization_id != job.organization_id:
+            raise WriteAuthorizationError("authorization organization does not match job")
+        if self.installation_id != job.installation_id:
+            raise WriteAuthorizationError("authorization installation does not match job")
+        if self.repository != repository or self.base_branch != base_branch:
+            raise WriteAuthorizationError("authorization repository target does not match")
+        if self.expires_at <= current:
+            raise WriteAuthorizationError("repository-write authorization has expired")
+        if self.authorized_at > current:
+            raise WriteAuthorizationError("repository-write authorization is not yet active")
+        return job.model_copy(update={"dry_run": False})
 
 
 class WriteAuthorizationStore:
