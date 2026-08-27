@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -21,7 +21,7 @@ def make_job(status: RemediationStatus) -> RemediationJob:
 
 
 def test_approval_releases_waiting_job_to_queue() -> None:
-    approved_at = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    approved_at = datetime(2026, 8, 27, tzinfo=UTC)
     job, approval = approve_remediation(
         make_job(RemediationStatus.AWAITING_APPROVAL),
         approved_by="operator-1",
@@ -57,7 +57,7 @@ def test_approval_requires_timezone_aware_timestamp() -> None:
 
 
 def test_approval_record_requires_identity_fields() -> None:
-    timestamp = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 8, 27, tzinfo=UTC)
     with pytest.raises(ApprovalError, match="job_id"):
         RemediationApproval(" ", "org-1", "install-1", "operator-1", timestamp)
     with pytest.raises(ApprovalError, match="organization_id"):
