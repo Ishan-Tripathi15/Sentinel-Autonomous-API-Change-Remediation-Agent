@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from sentinel.audit import InMemoryAuditSink
 from sentinel.models import RemediationJob
 from sentinel.remediation_worker import RemediationWorker
@@ -12,12 +14,16 @@ class FakeQueue:
         self.completed = None
         self.failed = None
         self.checkpoints: list[RemediationJob] = []
+        self.renewals: list[tuple[str, str, int]] = []
 
     def claim(self, *, worker_id: str, lease_seconds: int) -> RemediationJob | None:
         if self.claimed:
             return None
         self.claimed = True
         return self.job
+
+    def renew_lease(self, *, job_id: str, worker_id: str, lease_seconds: int) -> None:
+        self.renewals.append((job_id, worker_id, lease_seconds))
 
     def checkpoint(self, *, job_id: str, worker_id: str, payload: RemediationJob) -> None:
         self.checkpoints.append(payload)
@@ -180,3 +186,28 @@ def test_worker_rejects_stage_identity_changes() -> None:
     assert result.job.status == "failed"
     assert queue.failed is not None
     assert queue.failed.organization_id == "org-1"
+
+
+def test_worker_renews_lease_during_long_running_stage() -> None:
+    queue = FakeQueue(make_job())
+    audit = InMemoryAuditSink()
+
+    def slow_prepare(job: RemediationJob) -> RemediationJob:
+        time.sleep(1.2)
+        return job
+
+    worker = RemediationWorker(
+        queue,
+        audit,
+        worker_id="worker-1",
+        prepare=slow_prepare,
+        generate_patch=identity,
+        verify=identity,
+    )
+
+    result = worker.run_once(lease_seconds=3)
+
+    assert result is not None
+    assert result.completed is True
+    assert queue.renewals
+    assert queue.renewals[0] == ("job-1", "worker-1", 3)
