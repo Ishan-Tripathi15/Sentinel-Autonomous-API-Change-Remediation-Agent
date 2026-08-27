@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -8,7 +8,7 @@ from sentinel.models import RemediationJob
 from sentinel.write_authorization import RepositoryWriteAuthorization, WriteAuthorizationError
 
 
-def make_job(*, dry_run: bool = False) -> RemediationJob:
+def make_job(*, dry_run: bool = True) -> RemediationJob:
     return RemediationJob(
         job_id="job-1",
         organization_id="org-1",
@@ -31,20 +31,42 @@ def make_authorization(*, job: RemediationJob | None = None, expires_in: int = 9
     )
 
 
-def test_authorization_is_default_deny_without_a_token() -> None:
-    with pytest.raises(WriteAuthorizationError, match="authorization"):
-        raise WriteAuthorizationError("authorization is required")
+def test_authorization_activation_is_required_for_write() -> None:
+    authorization = make_authorization()
+    with pytest.raises(WriteAuthorizationError, match="dry-run"):
+        authorization.validate_for(
+            make_job(),
+            repository="acme/service",
+            base_branch="main",
+            now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
+        )
+
+    activated = authorization.activate_job(
+        make_job(),
+        repository="acme/service",
+        base_branch="main",
+        now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
+    )
+    assert activated.dry_run is False
+    authorization.validate_for(
+        activated,
+        repository="acme/service",
+        base_branch="main",
+        now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
+    )
 
 
 def test_authorization_binds_job_and_repository_identity() -> None:
     authorization = make_authorization()
-    authorization.validate_for(
-        make_job(), repository="acme/service", base_branch="main", now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC)
+    job = authorization.activate_job(
+        make_job(),
+        repository="acme/service",
+        base_branch="main",
+        now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
     )
-
     with pytest.raises(WriteAuthorizationError, match="job"):
         authorization.validate_for(
-            make_job().model_copy(update={"job_id": "other"}),
+            job.model_copy(update={"job_id": "other"}),
             repository="acme/service",
             base_branch="main",
             now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
@@ -52,29 +74,35 @@ def test_authorization_binds_job_and_repository_identity() -> None:
 
     with pytest.raises(WriteAuthorizationError, match="repository"):
         authorization.validate_for(
-            make_job(), repository="acme/other", base_branch="main", now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC)
+            job, repository="acme/other", base_branch="main", now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC)
         )
 
 
 def test_expired_authorization_is_rejected() -> None:
     authorization = make_authorization(expires_in=60)
+    job = authorization.activate_job(
+        make_job(),
+        repository="acme/service",
+        base_branch="main",
+        now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
+    )
     with pytest.raises(WriteAuthorizationError, match="expired"):
         authorization.validate_for(
-            make_job(),
+            job,
             repository="acme/service",
             base_branch="main",
             now=datetime(2026, 8, 28, 12, 1, 1, tzinfo=UTC),
         )
 
 
-def test_dry_run_job_cannot_use_authorization() -> None:
-    authorization = make_authorization(job=make_job(dry_run=True))
-    with pytest.raises(WriteAuthorizationError, match="dry-run"):
-        authorization.validate_for(
-            make_job(dry_run=True),
+def test_authorization_cannot_activate_after_expiry() -> None:
+    authorization = make_authorization(expires_in=60)
+    with pytest.raises(WriteAuthorizationError, match="expired"):
+        authorization.activate_job(
+            make_job(),
             repository="acme/service",
             base_branch="main",
-            now=datetime(2026, 8, 28, 12, 1, tzinfo=UTC),
+            now=datetime(2026, 8, 28, 12, 1, 1, tzinfo=UTC),
         )
 
 
