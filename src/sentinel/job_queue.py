@@ -42,13 +42,30 @@ class PostgresJobQueue:
                     ON CONFLICT (job_id) DO NOTHING
                     """,
                     (
-                        job.job_id, job.organization_id, job.installation_id,
-                        job.change_event_id, job.status,
+                        job.job_id,
+                        job.organization_id,
+                        job.installation_id,
+                        job.change_event_id,
+                        job.status,
                         json.dumps(job.model_dump(mode="json")),
                     ),
                 )
         except Error as exc:
             raise JobQueueError("job enqueue failed") from exc
+
+    def get(self, *, job_id: str) -> RemediationJob | None:
+        """Load one durable job by ID without trusting caller-supplied state."""
+        if not job_id.strip():
+            raise JobQueueError("job_id is required")
+        try:
+            with self._pool.connection() as connection:
+                row = connection.execute(
+                    "SELECT payload FROM remediation_jobs WHERE job_id = %s",
+                    (job_id,),
+                ).fetchone()
+                return RemediationJob.model_validate(row["payload"]) if row else None
+        except Error as exc:
+            raise JobQueueError("job lookup failed") from exc
 
     def claim(self, *, worker_id: str, lease_seconds: int = 300) -> RemediationJob | None:
         """Atomically claim one ready job and lease it to a worker."""
@@ -82,6 +99,37 @@ class PostgresJobQueue:
                 return RemediationJob.model_validate(row["payload"]) if row else None
         except Error as exc:
             raise JobQueueError("job claim failed") from exc
+
+    def release_approval(self, *, job: RemediationJob) -> None:
+        """Atomically release one held job after a validated human approval."""
+        if job.status != "queued":
+            raise JobQueueError("approved job must be queued")
+        try:
+            with self._pool.connection() as connection:
+                result = connection.execute(
+                    """
+                    UPDATE remediation_jobs
+                    SET status = 'queued', payload = %s::jsonb, worker_id = NULL,
+                        lease_until = NULL, available_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE job_id = %s
+                      AND organization_id = %s
+                      AND installation_id = %s
+                      AND status = 'awaiting-approval'
+                    """,
+                    (
+                        json.dumps(job.model_dump(mode="json")),
+                        job.job_id,
+                        job.organization_id,
+                        job.installation_id,
+                    ),
+                )
+                if result.rowcount != 1:
+                    raise JobQueueError("job is no longer awaiting approval")
+        except JobQueueError:
+            raise
+        except Error as exc:
+            raise JobQueueError("approval release failed") from exc
 
     def complete(self, *, job_id: str, worker_id: str, payload: RemediationJob) -> None:
         """Complete a lease owned by this worker."""
