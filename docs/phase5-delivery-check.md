@@ -1,0 +1,1 @@
+Delivery idempotency is a prerequisite to autonomous repository mutation. The deterministic key and durable attempt record are in place; provider recovery remains the next integration boundary.
