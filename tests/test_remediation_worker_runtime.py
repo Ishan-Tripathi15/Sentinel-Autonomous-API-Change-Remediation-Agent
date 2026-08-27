@@ -43,6 +43,11 @@ def make_result(completed: bool) -> RemediationWorkerResult:
 def test_runtime_counts_jobs_until_worker_requests_shutdown() -> None:
     stop_event = Event()
     worker = FakeWorker([make_result(True), make_result(False), None])
+    runtime = RemediationWorkerRuntime(
+        worker,
+        config=WorkerRuntimeConfig(lease_seconds=42),
+        stop_event=stop_event,
+    )
 
     original_run_once = worker.run_once
 
@@ -53,18 +58,16 @@ def test_runtime_counts_jobs_until_worker_requests_shutdown() -> None:
         return result
 
     worker.run_once = run_once
-    runtime = RemediationWorkerRuntime(
-        worker,
-        config=WorkerRuntimeConfig(lease_seconds=42),
-        stop_event=stop_event,
-    )
-
     stats = runtime.run()
 
     assert stats.jobs_completed == 1
     assert stats.jobs_failed == 1
     assert stats.runtime_errors == 0
     assert worker.lease_seconds == [42, 42, 42]
+    assert runtime.metrics.snapshot().jobs_completed == 1
+    assert runtime.metrics.snapshot().jobs_failed == 1
+    assert runtime.health.snapshot().ready is True
+    assert runtime.health.snapshot().accepting_work is True
     assert stats.duration_seconds >= 0
 
 
@@ -99,9 +102,11 @@ def test_runtime_backs_off_after_worker_error_and_recovers() -> None:
 
     assert stats.runtime_errors == 1
     assert stats.jobs_completed == 1
+    assert runtime.metrics.snapshot().runtime_errors == 1
+    assert runtime.health.snapshot().runtime_errors == 1
 
 
-def test_request_stop_interrupts_runtime() -> None:
+def test_request_stop_interrupts_runtime_and_marks_not_ready_for_work() -> None:
     stop_event = Event()
     worker = FakeWorker([None])
     runtime = RemediationWorkerRuntime(
@@ -116,6 +121,7 @@ def test_request_stop_interrupts_runtime() -> None:
     thread.join(timeout=1)
 
     assert not thread.is_alive()
+    assert runtime.health.snapshot().accepting_work is False
 
 
 def test_runtime_config_rejects_unsafe_values() -> None:
