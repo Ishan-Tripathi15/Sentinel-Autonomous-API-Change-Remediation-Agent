@@ -81,7 +81,10 @@ class PostgresJobQueue:
                         SELECT job_id
                         FROM remediation_jobs
                         WHERE available_at <= CURRENT_TIMESTAMP
-                          AND (status = 'queued' OR (status = 'running' AND lease_until < CURRENT_TIMESTAMP))
+                          AND (
+                              status = 'queued'
+                              OR (status = 'running' AND lease_until < CURRENT_TIMESTAMP)
+                          )
                         ORDER BY created_at ASC, job_id ASC
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
@@ -131,17 +134,59 @@ class PostgresJobQueue:
         except Error as exc:
             raise JobQueueError("approval release failed") from exc
 
+    def checkpoint(self, *, job_id: str, worker_id: str, payload: RemediationJob) -> None:
+        """Persist completed stage progress while retaining the worker lease."""
+        if not job_id.strip() or not worker_id.strip():
+            raise JobQueueError("job_id and worker_id are required")
+        if payload.job_id != job_id:
+            raise JobQueueError("checkpoint job identity does not match job_id")
+        if payload.status in {"queued", "running", "failed", "awaiting-approval"}:
+            raise JobQueueError("checkpoint requires a completed workflow stage")
+        try:
+            with self._pool.connection() as connection:
+                result = connection.execute(
+                    """
+                    UPDATE remediation_jobs
+                    SET payload = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                    WHERE job_id = %s
+                      AND worker_id = %s
+                      AND status = 'running'
+                      AND lease_until >= CURRENT_TIMESTAMP
+                    """,
+                    (json.dumps(payload.model_dump(mode="json")), job_id, worker_id),
+                )
+                if result.rowcount != 1:
+                    raise JobQueueError("job lease is not owned by worker")
+        except JobQueueError:
+            raise
+        except Error as exc:
+            raise JobQueueError("job checkpoint failed") from exc
+
     def complete(self, *, job_id: str, worker_id: str, payload: RemediationJob) -> None:
         """Complete a lease owned by this worker."""
         self._update_owned(job_id, worker_id, payload, payload.status, None)
 
-    def fail(self, *, job_id: str, worker_id: str, payload: RemediationJob, retry_after_seconds: int = 30) -> None:
+    def fail(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload: RemediationJob,
+        retry_after_seconds: int = 30,
+    ) -> None:
         """Return a failed job to the queue with bounded retry delay."""
         if retry_after_seconds < 0 or retry_after_seconds > 3600:
             raise JobQueueError("retry_after_seconds must be between 0 and 3600")
         self._update_owned(job_id, worker_id, payload, "queued", retry_after_seconds)
 
-    def _update_owned(self, job_id: str, worker_id: str, payload: RemediationJob, status: str, retry_after_seconds: int | None) -> None:
+    def _update_owned(
+        self,
+        job_id: str,
+        worker_id: str,
+        payload: RemediationJob,
+        status: str,
+        retry_after_seconds: int | None,
+    ) -> None:
         if not job_id.strip() or not worker_id.strip():
             raise JobQueueError("job_id and worker_id are required")
         try:
@@ -166,7 +211,13 @@ class PostgresJobQueue:
                             updated_at = CURRENT_TIMESTAMP
                         WHERE job_id = %s AND worker_id = %s
                         """,
-                        (status, json.dumps(payload.model_dump(mode="json")), retry_after_seconds, job_id, worker_id),
+                        (
+                            status,
+                            json.dumps(payload.model_dump(mode="json")),
+                            retry_after_seconds,
+                            job_id,
+                            worker_id,
+                        ),
                     )
                 if result.rowcount != 1:
                     raise JobQueueError("job lease is not owned by worker")

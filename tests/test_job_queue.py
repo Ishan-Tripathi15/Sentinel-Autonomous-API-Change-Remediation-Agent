@@ -53,7 +53,11 @@ def test_claim_and_complete_requires_lease_owner(queue: PostgresJobQueue) -> Non
     assert claimed == value
 
     with pytest.raises(JobQueueError, match="not owned"):
-        queue.complete(job_id=value.job_id, worker_id="worker-b", payload=value.model_copy(update={"status": "verified"}))
+        queue.complete(
+            job_id=value.job_id,
+            worker_id="worker-b",
+            payload=value.model_copy(update={"status": "verified"}),
+        )
 
     completed = value.model_copy(update={"status": "dry-run-complete"})
     queue.complete(job_id=value.job_id, worker_id="worker-a", payload=completed)
@@ -68,6 +72,46 @@ def test_claim_is_exclusive(queue: PostgresJobQueue) -> None:
 
     assert first is not None
     assert second is None
+
+
+def test_checkpoint_persists_stage_payload(queue: PostgresJobQueue) -> None:
+    value = job()
+    queue.enqueue(value)
+    assert queue.claim(worker_id="worker-a") == value
+
+    checkpoint = value.model_copy(
+        update={
+            "status": "patch-generated",
+            "patch_diff": "--- a/client.ts\n+++ b/client.ts\n",
+        }
+    )
+    queue.checkpoint(job_id=value.job_id, worker_id="worker-a", payload=checkpoint)
+
+    persisted = queue.get(job_id=value.job_id)
+    assert persisted == checkpoint
+
+
+def test_checkpoint_requires_lease_owner(queue: PostgresJobQueue) -> None:
+    value = job()
+    queue.enqueue(value)
+    assert queue.claim(worker_id="worker-a") == value
+    checkpoint = value.model_copy(update={"status": "patch-generated"})
+
+    with pytest.raises(JobQueueError, match="not owned"):
+        queue.checkpoint(job_id=value.job_id, worker_id="worker-b", payload=checkpoint)
+
+
+def test_checkpoint_rejects_identity_mismatch(queue: PostgresJobQueue) -> None:
+    value = job()
+    queue.enqueue(value)
+    assert queue.claim(worker_id="worker-a") == value
+
+    with pytest.raises(JobQueueError, match="identity"):
+        queue.checkpoint(
+            job_id=value.job_id,
+            worker_id="worker-a",
+            payload=value.model_copy(update={"job_id": "other-job", "status": "patch-generated"}),
+        )
 
 
 def test_fail_returns_job_to_queue(queue: PostgresJobQueue) -> None:
