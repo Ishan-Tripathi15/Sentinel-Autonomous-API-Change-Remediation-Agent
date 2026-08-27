@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
-from .delivery_idempotency import DeliveryAttempt, DeliveryAttemptStore, DeliveryIdempotencyError
+from .delivery_idempotency import (
+    DeliveryAttempt,
+    DeliveryAttemptStore,
+    DeliveryIdempotencyError,
+)
 from .delivery_reconciliation import DeliveryReconciliationError, DeliveryReconciler
 from .github_delivery import GitHubDeliveryClient, GitHubFileChange
 from .models import RemediationJob
