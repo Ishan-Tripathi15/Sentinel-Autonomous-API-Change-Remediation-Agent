@@ -1,0 +1,1 @@
+The durable delivery record is the persistence boundary for retry identity. Provider integration must additionally recover deterministic GitHub branch/PR results across the external-provider gap before enabling autonomous writes.
