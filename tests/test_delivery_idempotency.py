@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sentinel.delivery_idempotency import DeliveryAttempt, PostgresDeliveryIdempotency
 from sentinel.models import RemediationJob
@@ -57,7 +57,7 @@ def test_delivery_key_changes_when_repository_identity_changes() -> None:
 
 
 def test_delivery_attempt_is_provider_result_container() -> None:
-    completed_at = datetime.now(timezone.utc)
+    completed_at = datetime.now(UTC)
     attempt = DeliveryAttempt(
         delivery_key="key",
         job_id="job-1",
