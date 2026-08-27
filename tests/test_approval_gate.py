@@ -45,5 +45,5 @@ def test_approve_requires_timezone_aware_timestamp() -> None:
         approve_remediation(
             job(RemediationStatus.AWAITING_APPROVAL),
             approved_by="operator-1",
-            approved_at=datetime(2026, 8, 27),
+            approved_at=datetime.fromisoformat("2026-08-27T00:00:00"),
         )
