@@ -18,7 +18,7 @@ def queue() -> PostgresJobQueue:
         pytest.skip("SENTINEL_DATABASE_URL is not configured")
     migrate(_DATABASE_URL)
     with psycopg.connect(_DATABASE_URL) as connection:
-        connection.execute("TRUNCATE remediation_delivery_attempts, remediation_jobs")
+        connection.execute("TRUNCATE remediation_write_authorizations, remediation_delivery_attempts, remediation_jobs")
     value = PostgresJobQueue(_DATABASE_URL, min_size=1, max_size=2)
     yield value
     value.close()

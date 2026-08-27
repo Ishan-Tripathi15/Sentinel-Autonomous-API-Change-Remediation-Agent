@@ -1,18 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 
-from sentinel.github_delivery import (
-    GitHubDeliveryClient,
-    GitHubDeliveryError,
-    GitHubFileChange,
-)
+from sentinel.github_delivery import GitHubDeliveryClient, GitHubDeliveryError, GitHubFileChange
 from sentinel.models import RemediationJob
 from sentinel.orchestrator import RemediationStatus
+from sentinel.write_authorization import RepositoryWriteAuthorization
 
 REPOSITORY = "acme/service"
-
 
 
 def make_job(*, status: str = RemediationStatus.VERIFIED.value, dry_run: bool = False) -> RemediationJob:
@@ -26,6 +24,16 @@ def make_job(*, status: str = RemediationStatus.VERIFIED.value, dry_run: bool = 
     )
 
 
+def make_authorization(job: RemediationJob | None = None) -> RepositoryWriteAuthorization:
+    return RepositoryWriteAuthorization.issue(
+        job or make_job(),
+        repository=REPOSITORY,
+        base_branch="main",
+        authorized_by="policy-engine",
+        authorized_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+
+
 def make_client(handler) -> GitHubDeliveryClient:
     client = GitHubDeliveryClient("token")
     client._client.close()
@@ -33,10 +41,10 @@ def make_client(handler) -> GitHubDeliveryClient:
     return client
 
 
-def test_delivery_requires_explicit_write_gate() -> None:
+def test_delivery_requires_repository_write_authorization() -> None:
     client = GitHubDeliveryClient("token")
     try:
-        with pytest.raises(GitHubDeliveryError, match="allow_write"):
+        with pytest.raises(GitHubDeliveryError, match="authorization is required"):
             client.deliver(
                 make_job(),
                 repository=REPOSITORY,
@@ -44,13 +52,13 @@ def test_delivery_requires_explicit_write_gate() -> None:
                 title="chore: remediate",
                 body="body",
                 changes=[GitHubFileChange("src/client.py", "updated")],
-                allow_write=False,
+                authorization=None,
             )
     finally:
         client.close()
 
 
-def test_delivery_rejects_dry_run_job() -> None:
+def test_delivery_rejects_dry_run_authorization() -> None:
     client = GitHubDeliveryClient("token")
     try:
         with pytest.raises(GitHubDeliveryError, match="dry-run"):
@@ -61,7 +69,7 @@ def test_delivery_rejects_dry_run_job() -> None:
                 title="chore: remediate",
                 body="body",
                 changes=[GitHubFileChange("src/client.py", "updated")],
-                allow_write=True,
+                authorization=make_authorization(make_job(dry_run=True)),
             )
     finally:
         client.close()
@@ -69,28 +77,27 @@ def test_delivery_rejects_dry_run_job() -> None:
 
 def test_delivery_rejects_unverified_job() -> None:
     client = GitHubDeliveryClient("token")
+    job = make_job(status=RemediationStatus.FAILED.value)
     try:
         with pytest.raises(GitHubDeliveryError, match="verified"):
             client.deliver(
-                make_job(status=RemediationStatus.FAILED.value),
+                job,
                 repository=REPOSITORY,
                 base_branch="main",
                 title="chore: remediate",
                 body="body",
                 changes=[GitHubFileChange("src/client.py", "updated")],
-                allow_write=True,
+                authorization=make_authorization(job),
             )
     finally:
         client.close()
 
 
 def test_delivery_builds_one_commit_and_pull_request() -> None:
-    calls: list[tuple[str, str, dict | None]] = []
+    calls: list[tuple[str, str, str | None]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        payload = None
-        if request.content:
-            payload = request.read().decode()
+        payload = request.content.decode() if request.content else None
         calls.append((request.method, request.url.path, payload))
         if request.method == "GET" and request.url.path.endswith("/git/ref/heads/main"):
             return httpx.Response(200, json={"object": {"sha": "base-sha"}})
@@ -119,7 +126,7 @@ def test_delivery_builds_one_commit_and_pull_request() -> None:
             title="chore: remediate",
             body="Sentinel remediation",
             changes=[GitHubFileChange("src/client.py", "updated")],
-            allow_write=True,
+            authorization=make_authorization(),
         )
     finally:
         client.close()
@@ -127,16 +134,24 @@ def test_delivery_builds_one_commit_and_pull_request() -> None:
     assert result.number == 42
     assert result.branch_name == "sentinel/remediation/job-123"
     assert result.commit_sha == "commit-sha"
-    assert [method for method, _, _ in calls] == [
-        "GET",
-        "GET",
-        "GET",
-        "POST",
-        "POST",
-        "POST",
-        "POST",
-        "POST",
-    ]
+    assert [method for method, _, _ in calls] == ["GET", "GET", "GET", "POST", "POST", "POST", "POST", "POST"]
+
+
+def test_delivery_rejects_mismatched_authorization_before_remote_write() -> None:
+    client = GitHubDeliveryClient("token")
+    try:
+        with pytest.raises(GitHubDeliveryError, match="does not belong"):
+            client.deliver(
+                make_job(),
+                repository=REPOSITORY,
+                base_branch="main",
+                title="chore: remediate",
+                body="body",
+                changes=[GitHubFileChange("src/client.py", "updated")],
+                authorization=make_authorization(make_job().model_copy(update={"job_id": "other-job"})),
+            )
+    finally:
+        client.close()
 
 
 def test_delivery_rejects_existing_branch_before_creating_blobs() -> None:
@@ -159,7 +174,7 @@ def test_delivery_rejects_existing_branch_before_creating_blobs() -> None:
                 title="chore: remediate",
                 body="body",
                 changes=[GitHubFileChange("src/client.py", "updated")],
-                allow_write=True,
+                authorization=make_authorization(),
             )
     finally:
         client.close()
@@ -185,7 +200,7 @@ def test_delivery_rejects_unsafe_file_changes(change: GitHubFileChange) -> None:
                 title="chore: remediate",
                 body="body",
                 changes=[change],
-                allow_write=True,
+                authorization=make_authorization(),
             )
     finally:
         client.close()
