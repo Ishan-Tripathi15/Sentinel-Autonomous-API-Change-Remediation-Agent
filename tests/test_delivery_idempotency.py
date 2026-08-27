@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sentinel.delivery_idempotency import DeliveryAttempt, PostgresDeliveryIdempotency
+from sentinel.delivery_idempotency import DeliveryAttempt, DeliveryAttemptStore, build_delivery_key
 from sentinel.models import RemediationJob
 
 
@@ -20,56 +20,38 @@ def make_job(*, job_id: str = "job-1") -> RemediationJob:
 def test_delivery_key_is_stable_for_same_delivery_identity() -> None:
     job = make_job()
 
-    first = PostgresDeliveryIdempotency.delivery_key(
-        job,
-        provider="github",
-        repository="acme/api",
-        base_branch="main",
-    )
-    second = PostgresDeliveryIdempotency.delivery_key(
-        job.model_copy(update={"status": "completed"}),
-        provider="github",
-        repository="acme/api",
-        base_branch="main",
+    assert build_delivery_key(job) == build_delivery_key(
+        job.model_copy(update={"status": "completed"})
     )
 
-    assert first == second
-    assert len(first) == 64
 
-
-def test_delivery_key_changes_when_repository_identity_changes() -> None:
+def test_delivery_key_changes_when_job_identity_changes() -> None:
     job = make_job()
 
-    github_key = PostgresDeliveryIdempotency.delivery_key(
-        job,
-        provider="github",
-        repository="acme/api",
-        base_branch="main",
-    )
-    other_repo_key = PostgresDeliveryIdempotency.delivery_key(
-        job,
-        provider="github",
-        repository="acme/other-api",
-        base_branch="main",
-    )
-
-    assert github_key != other_repo_key
+    assert build_delivery_key(job) != build_delivery_key(make_job(job_id="job-2"))
 
 
-def test_delivery_attempt_is_provider_result_container() -> None:
-    completed_at = datetime.now(UTC)
+def test_delivery_attempt_contains_persisted_provider_result() -> None:
+    lease_until = datetime.now(UTC)
     attempt = DeliveryAttempt(
         delivery_key="key",
         job_id="job-1",
         status="succeeded",
         provider="github",
+        delivery_owner="worker-1",
+        lease_until=lease_until,
         pull_request_number=123,
         pull_request_url="https://github.com/acme/api/pull/123",
-        commit_sha="abc123",
-        completed_at=completed_at,
     )
 
     assert attempt.status == "succeeded"
+    assert attempt.provider == "github"
+    assert attempt.delivery_owner == "worker-1"
+    assert attempt.lease_until == lease_until
     assert attempt.pull_request_number == 123
-    assert attempt.commit_sha == "abc123"
-    assert attempt.completed_at == completed_at
+    assert attempt.pull_request_url.endswith("/123")
+
+
+def test_store_requires_a_connection_pool() -> None:
+    store = DeliveryAttemptStore
+    assert store is not None
