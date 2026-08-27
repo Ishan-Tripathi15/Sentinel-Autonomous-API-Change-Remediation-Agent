@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,7 +19,7 @@ def job(status: RemediationStatus) -> RemediationJob:
 
 
 def test_approve_releases_held_job() -> None:
-    timestamp = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 8, 27, tzinfo=UTC)
     released, approval = approve_remediation(
         job(RemediationStatus.AWAITING_APPROVAL),
         approved_by="operator-1",
