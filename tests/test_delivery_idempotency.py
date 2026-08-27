@@ -14,11 +14,16 @@ from sentinel.delivery_idempotency import (
 from sentinel.models import RemediationJob
 
 
+REPOSITORY = "acme/api"
+BASE_BRANCH = "main"
+PROVIDER = "github"
+
+
 def make_job(*, job_id: str = "job-1") -> RemediationJob:
     return RemediationJob(
         job_id=job_id,
         organization_id="org-1",
-        installation_id="install-1",
+        installation_id="installation-1",
         change_event_id="event-1",
         status="verified",
         dry_run=False,
@@ -32,18 +37,36 @@ def make_store() -> tuple[DeliveryAttemptStore, MagicMock, MagicMock]:
     return DeliveryAttemptStore(pool), pool, connection
 
 
+def delivery_key(job: RemediationJob) -> str:
+    return build_delivery_key(
+        job,
+        provider=PROVIDER,
+        repository=REPOSITORY,
+        base_branch=BASE_BRANCH,
+    )
+
+
 def test_delivery_key_is_stable_for_same_delivery_identity() -> None:
     job = make_job()
 
-    assert build_delivery_key(job) == build_delivery_key(
-        job.model_copy(update={"status": "completed"})
-    )
+    assert delivery_key(job) == delivery_key(job.model_copy(update={"status": "completed"}))
 
 
 def test_delivery_key_changes_when_job_identity_changes() -> None:
     job = make_job()
 
-    assert build_delivery_key(job) != build_delivery_key(make_job(job_id="job-2"))
+    assert delivery_key(job) != delivery_key(make_job(job_id="job-2"))
+
+
+def test_delivery_key_changes_when_repository_identity_changes() -> None:
+    job = make_job()
+
+    assert delivery_key(job) != build_delivery_key(
+        job,
+        provider=PROVIDER,
+        repository="acme/other-api",
+        base_branch=BASE_BRANCH,
+    )
 
 
 def test_delivery_attempt_contains_persisted_provider_result() -> None:
