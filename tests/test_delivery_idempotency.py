@@ -5,7 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sentinel.delivery_idempotency import DeliveryAttempt, DeliveryAttemptStore, DeliveryIdempotencyError, build_delivery_key
+from sentinel.delivery_idempotency import (
+    DeliveryAttempt,
+    DeliveryAttemptStore,
+    DeliveryIdempotencyError,
+    build_delivery_key,
+)
 from sentinel.models import RemediationJob
 
 
