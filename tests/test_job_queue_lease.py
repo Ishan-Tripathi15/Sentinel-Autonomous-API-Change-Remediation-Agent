@@ -18,7 +18,7 @@ def queue() -> PostgresJobQueue:
         pytest.skip("SENTINEL_DATABASE_URL is not configured")
     migrate(_DATABASE_URL)
     with psycopg.connect(_DATABASE_URL) as connection:
-        connection.execute("TRUNCATE remediation_jobs")
+        connection.execute("TRUNCATE remediation_delivery_attempts, remediation_jobs")
     value = PostgresJobQueue(_DATABASE_URL, min_size=1, max_size=2)
     yield value
     value.close()
@@ -39,25 +39,16 @@ def test_renew_lease_extends_owned_running_job(queue: PostgresJobQueue) -> None:
     value = job()
     queue.enqueue(value)
     assert queue.claim(worker_id="worker-a", lease_seconds=60) == value
-
     queue.renew_lease(job_id=value.job_id, worker_id="worker-a", lease_seconds=300)
-
     with psycopg.connect(_DATABASE_URL) as connection:
-        row = connection.execute(
-            "SELECT worker_id, status, lease_until > CURRENT_TIMESTAMP "
-            "FROM remediation_jobs WHERE job_id = %s",
-            (value.job_id,),
-        ).fetchone()
-    assert row[0] == "worker-a"
-    assert row[1] == "running"
-    assert row[2] is True
+        row = connection.execute("SELECT worker_id, status, lease_until > CURRENT_TIMESTAMP FROM remediation_jobs WHERE job_id = %s", (value.job_id,)).fetchone()
+    assert row == ("worker-a", "running", True)
 
 
 def test_renew_lease_rejects_other_worker(queue: PostgresJobQueue) -> None:
     value = job()
     queue.enqueue(value)
     assert queue.claim(worker_id="worker-a") == value
-
     with pytest.raises(JobQueueError, match="not owned"):
         queue.renew_lease(job_id=value.job_id, worker_id="worker-b")
 
@@ -80,14 +71,7 @@ def test_expired_lease_cannot_be_renewed(queue: PostgresJobQueue) -> None:
     value = job()
     queue.enqueue(value)
     assert queue.claim(worker_id="worker-a", lease_seconds=60) == value
-
     with psycopg.connect(_DATABASE_URL) as connection:
-        connection.execute(
-            "UPDATE remediation_jobs "
-            "SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second' "
-            "WHERE job_id = %s",
-            (value.job_id,),
-        )
-
+        connection.execute("UPDATE remediation_jobs SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE job_id = %s", (value.job_id,))
     with pytest.raises(JobQueueError, match="not owned"):
         queue.renew_lease(job_id=value.job_id, worker_id="worker-a")
