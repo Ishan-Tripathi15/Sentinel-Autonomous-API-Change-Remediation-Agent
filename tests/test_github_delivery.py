@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -30,7 +30,7 @@ def make_authorization(job: RemediationJob | None = None) -> RepositoryWriteAuth
         repository=REPOSITORY,
         base_branch="main",
         authorized_by="policy-engine",
-        authorized_at=datetime(2026, 8, 28, 12, tzinfo=UTC),
+        authorized_at=datetime.now(UTC) - timedelta(seconds=1),
     )
 
 
