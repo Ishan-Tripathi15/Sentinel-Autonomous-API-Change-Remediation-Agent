@@ -8,7 +8,7 @@ from .delivery_idempotency import (
     DeliveryAttemptStore,
     DeliveryIdempotencyError,
 )
-from .delivery_reconciliation import DeliveryReconciliationError, DeliveryReconciler
+from .delivery_reconciliation import DeliveryReconciler, DeliveryReconciliationError
 from .github_delivery import GitHubDeliveryClient, GitHubFileChange
 from .models import RemediationJob
 
@@ -112,7 +112,7 @@ class GitHubDeliveryExecutor:
                 changes=change_list,
                 allow_write=allow_write,
             )
-        except Exception as exc:  # noqa: BLE001 - preserve ambiguity for reconciliation
+        except Exception as exc:
             raise DeliveryExecutionError(
                 "GitHub delivery outcome is ambiguous; reconcile before retrying"
             ) from exc
