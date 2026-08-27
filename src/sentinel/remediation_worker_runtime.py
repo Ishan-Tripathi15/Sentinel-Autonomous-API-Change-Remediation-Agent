@@ -7,6 +7,8 @@ from time import monotonic
 from typing import Protocol
 
 from .remediation_worker import RemediationWorkerError, RemediationWorkerResult
+from .worker_health import WorkerHealth
+from .worker_observability import WorkerMetrics
 
 
 class WorkerRuntimeError(ValueError):
@@ -58,11 +60,7 @@ class WorkerLoop(Protocol):
 
 
 class RemediationWorkerRuntime:
-    """Run a remediation worker continuously with bounded backoff and shutdown.
-
-    The runtime owns process lifecycle only. Job safety remains inside
-    ``RemediationWorker`` and durable ownership remains inside the queue.
-    """
+    """Run a remediation worker continuously with bounded backoff and shutdown."""
 
     def __init__(
         self,
@@ -70,13 +68,26 @@ class RemediationWorkerRuntime:
         *,
         config: WorkerRuntimeConfig | None = None,
         stop_event: Event | None = None,
+        metrics: WorkerMetrics | None = None,
+        health: WorkerHealth | None = None,
     ) -> None:
         self._worker = worker
         self._config = config or WorkerRuntimeConfig()
         self._stop_event = stop_event or Event()
+        self._metrics = metrics or WorkerMetrics()
+        self._health = health or WorkerHealth()
+
+    @property
+    def metrics(self) -> WorkerMetrics:
+        return self._metrics
+
+    @property
+    def health(self) -> WorkerHealth:
+        return self._health
 
     def request_stop(self) -> None:
-        """Request graceful shutdown; an active poll wait is interrupted."""
+        """Request graceful shutdown and stop accepting work."""
+        self._health.mark_stopping()
         self._stop_event.set()
 
     def run(self) -> WorkerRuntimeStats:
@@ -87,24 +98,37 @@ class RemediationWorkerRuntime:
         runtime_errors = 0
         backoff = self._config.error_backoff_seconds
 
-        while not self._stop_event.is_set():
-            try:
-                result = self._worker.run_once(lease_seconds=self._config.lease_seconds)
-            except RemediationWorkerError:
-                runtime_errors += 1
-                self._stop_event.wait(timeout=backoff)
-                backoff = min(backoff * 2, self._config.max_error_backoff_seconds)
-                continue
+        if self._stop_event.is_set():
+            return WorkerRuntimeStats(started_at=started_at, stopped_at=monotonic())
 
-            backoff = self._config.error_backoff_seconds
-            if result is None:
-                self._stop_event.wait(timeout=self._config.poll_interval_seconds)
-                continue
+        self._health.mark_ready()
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    result = self._worker.run_once(lease_seconds=self._config.lease_seconds)
+                except RemediationWorkerError:
+                    runtime_errors += 1
+                    self._metrics.runtime_error()
+                    self._health.mark_runtime_error()
+                    self._stop_event.wait(timeout=backoff)
+                    backoff = min(backoff * 2, self._config.max_error_backoff_seconds)
+                    continue
 
-            if result.completed:
-                completed += 1
-            else:
-                failed += 1
+                backoff = self._config.error_backoff_seconds
+                if result is None:
+                    self._stop_event.wait(timeout=self._config.poll_interval_seconds)
+                    continue
+
+                self._metrics.job_started()
+                self._health.mark_activity()
+                if result.completed:
+                    completed += 1
+                    self._metrics.job_completed()
+                else:
+                    failed += 1
+                    self._metrics.job_failed()
+        finally:
+            self._health.mark_stopping()
 
         return WorkerRuntimeStats(
             jobs_completed=completed,
