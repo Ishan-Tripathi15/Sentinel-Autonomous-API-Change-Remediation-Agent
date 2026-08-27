@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from .delivery_idempotency import DeliveryAttempt, DeliveryAttemptStore, DeliveryIdempotencyError
-from .delivery_reconciliation import DeliveryReconciliationError, DeliveryReconciler, RemoteDelivery
+from .delivery_reconciliation import DeliveryReconciliationError, DeliveryReconciler
 from .github_delivery import GitHubDeliveryClient, GitHubFileChange
 from .models import RemediationJob
 
@@ -56,6 +56,20 @@ class GitHubDeliveryExecutor:
         changes: Sequence[GitHubFileChange],
         allow_write: bool,
     ) -> DeliveryExecutionResult:
+        change_list = list(changes)
+        try:
+            self._client.validate_request(
+                job,
+                repository=repository,
+                base_branch=base_branch,
+                title=title,
+                body=body,
+                changes=change_list,
+                allow_write=allow_write,
+            )
+        except ValueError as exc:
+            raise DeliveryExecutionError(str(exc)) from exc
+
         try:
             attempt = self._store.acquire(
                 job=job,
@@ -91,7 +105,7 @@ class GitHubDeliveryExecutor:
                 base_branch=base_branch,
                 title=title,
                 body=body,
-                changes=list(changes),
+                changes=change_list,
                 allow_write=allow_write,
             )
         except Exception as exc:  # noqa: BLE001 - preserve ambiguity for reconciliation
