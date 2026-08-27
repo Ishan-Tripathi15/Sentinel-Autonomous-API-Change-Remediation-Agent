@@ -7,6 +7,7 @@ from time import monotonic
 from typing import Protocol
 
 from .remediation_worker import RemediationWorkerError, RemediationWorkerResult
+from .worker_observability import WorkerMetrics
 
 
 class WorkerRuntimeError(ValueError):
@@ -58,11 +59,7 @@ class WorkerLoop(Protocol):
 
 
 class RemediationWorkerRuntime:
-    """Run a remediation worker continuously with bounded backoff and shutdown.
-
-    The runtime owns process lifecycle only. Job safety remains inside
-    ``RemediationWorker`` and durable ownership remains inside the queue.
-    """
+    """Run a remediation worker continuously with bounded backoff and shutdown."""
 
     def __init__(
         self,
@@ -70,10 +67,16 @@ class RemediationWorkerRuntime:
         *,
         config: WorkerRuntimeConfig | None = None,
         stop_event: Event | None = None,
+        metrics: WorkerMetrics | None = None,
     ) -> None:
         self._worker = worker
         self._config = config or WorkerRuntimeConfig()
         self._stop_event = stop_event or Event()
+        self._metrics = metrics or WorkerMetrics()
+
+    @property
+    def metrics(self) -> WorkerMetrics:
+        return self._metrics
 
     def request_stop(self) -> None:
         """Request graceful shutdown; an active poll wait is interrupted."""
@@ -92,6 +95,7 @@ class RemediationWorkerRuntime:
                 result = self._worker.run_once(lease_seconds=self._config.lease_seconds)
             except RemediationWorkerError:
                 runtime_errors += 1
+                self._metrics.runtime_error()
                 self._stop_event.wait(timeout=backoff)
                 backoff = min(backoff * 2, self._config.max_error_backoff_seconds)
                 continue
@@ -101,10 +105,13 @@ class RemediationWorkerRuntime:
                 self._stop_event.wait(timeout=self._config.poll_interval_seconds)
                 continue
 
+            self._metrics.job_started()
             if result.completed:
                 completed += 1
+                self._metrics.job_completed()
             else:
                 failed += 1
+                self._metrics.job_failed()
 
         return WorkerRuntimeStats(
             jobs_completed=completed,
