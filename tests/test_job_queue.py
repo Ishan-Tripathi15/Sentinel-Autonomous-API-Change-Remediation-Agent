@@ -83,6 +83,31 @@ def test_fail_returns_job_to_queue(queue: PostgresJobQueue) -> None:
     assert retried.job_id == value.job_id
 
 
+def test_approval_release_makes_held_job_claimable(queue: PostgresJobQueue) -> None:
+    held = job().model_copy(update={"status": "awaiting-approval"})
+    queue.enqueue(held)
+
+    assert queue.claim(worker_id="worker-a") is None
+
+    released = held.model_copy(update={"status": "queued"})
+    queue.release_approval(job=released)
+
+    claimed = queue.claim(worker_id="worker-a")
+    assert claimed is not None
+    assert claimed.job_id == held.job_id
+    assert claimed.organization_id == held.organization_id
+    assert claimed.installation_id == held.installation_id
+
+
+def test_approval_release_rejects_replay(queue: PostgresJobQueue) -> None:
+    held = job().model_copy(update={"status": "awaiting-approval"})
+    queue.enqueue(held)
+    queue.release_approval(job=held.model_copy(update={"status": "queued"}))
+
+    with pytest.raises(JobQueueError, match="no longer awaiting approval"):
+        queue.release_approval(job=held.model_copy(update={"status": "queued"}))
+
+
 def test_lease_bounds_are_enforced(queue: PostgresJobQueue) -> None:
     with pytest.raises(JobQueueError, match="lease_seconds"):
         queue.claim(worker_id="worker-a", lease_seconds=0)
