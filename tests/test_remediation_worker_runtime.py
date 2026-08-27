@@ -67,7 +67,7 @@ def test_runtime_counts_jobs_until_worker_requests_shutdown() -> None:
     assert runtime.metrics.snapshot().jobs_completed == 1
     assert runtime.metrics.snapshot().jobs_failed == 1
     assert runtime.health.snapshot().ready is True
-    assert runtime.health.snapshot().accepting_work is True
+    assert runtime.health.snapshot().accepting_work is False
     assert stats.duration_seconds >= 0
 
 
