@@ -97,32 +97,38 @@ class RemediationWorkerRuntime:
         failed = 0
         runtime_errors = 0
         backoff = self._config.error_backoff_seconds
+
+        if self._stop_event.is_set():
+            return WorkerRuntimeStats(started_at=started_at, stopped_at=monotonic())
+
         self._health.mark_ready()
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    result = self._worker.run_once(lease_seconds=self._config.lease_seconds)
+                except RemediationWorkerError:
+                    runtime_errors += 1
+                    self._metrics.runtime_error()
+                    self._health.mark_runtime_error()
+                    self._stop_event.wait(timeout=backoff)
+                    backoff = min(backoff * 2, self._config.max_error_backoff_seconds)
+                    continue
 
-        while not self._stop_event.is_set():
-            try:
-                result = self._worker.run_once(lease_seconds=self._config.lease_seconds)
-            except RemediationWorkerError:
-                runtime_errors += 1
-                self._metrics.runtime_error()
-                self._health.mark_runtime_error()
-                self._stop_event.wait(timeout=backoff)
-                backoff = min(backoff * 2, self._config.max_error_backoff_seconds)
-                continue
+                backoff = self._config.error_backoff_seconds
+                if result is None:
+                    self._stop_event.wait(timeout=self._config.poll_interval_seconds)
+                    continue
 
-            backoff = self._config.error_backoff_seconds
-            if result is None:
-                self._stop_event.wait(timeout=self._config.poll_interval_seconds)
-                continue
-
-            self._metrics.job_started()
-            self._health.mark_activity()
-            if result.completed:
-                completed += 1
-                self._metrics.job_completed()
-            else:
-                failed += 1
-                self._metrics.job_failed()
+                self._metrics.job_started()
+                self._health.mark_activity()
+                if result.completed:
+                    completed += 1
+                    self._metrics.job_completed()
+                else:
+                    failed += 1
+                    self._metrics.job_failed()
+        finally:
+            self._health.mark_stopping()
 
         return WorkerRuntimeStats(
             jobs_completed=completed,
