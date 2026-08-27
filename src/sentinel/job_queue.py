@@ -103,6 +103,33 @@ class PostgresJobQueue:
         except Error as exc:
             raise JobQueueError("job claim failed") from exc
 
+    def renew_lease(self, *, job_id: str, worker_id: str, lease_seconds: int = 300) -> None:
+        """Extend an active worker lease without changing workflow state."""
+        if not job_id.strip() or not worker_id.strip():
+            raise JobQueueError("job_id and worker_id are required")
+        if lease_seconds < 1 or lease_seconds > 3600:
+            raise JobQueueError("lease_seconds must be between 1 and 3600")
+        try:
+            with self._pool.connection() as connection:
+                result = connection.execute(
+                    """
+                    UPDATE remediation_jobs
+                    SET lease_until = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE job_id = %s
+                      AND worker_id = %s
+                      AND status = 'running'
+                      AND lease_until >= CURRENT_TIMESTAMP
+                    """,
+                    (lease_seconds, job_id, worker_id),
+                )
+                if result.rowcount != 1:
+                    raise JobQueueError("job lease is not owned by worker")
+        except JobQueueError:
+            raise
+        except Error as exc:
+            raise JobQueueError("job lease renewal failed") from exc
+
     def release_approval(self, *, job: RemediationJob) -> None:
         """Atomically release one held job after a validated human approval."""
         if job.status != "queued":
