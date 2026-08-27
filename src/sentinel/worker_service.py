@@ -32,7 +32,8 @@ def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
     if not minimum <= value <= maximum:
-        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        field_name = name.removeprefix("SENTINEL_WORKER_").lower()
+        raise ValueError(f"{field_name} must be between {minimum} and {maximum}")
     return value
 
 
