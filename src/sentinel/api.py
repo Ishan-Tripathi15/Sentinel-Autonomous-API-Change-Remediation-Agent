@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
+from .approval_gate import ApprovalError, approve_remediation
 from .audit import AuditError, build_audit_event, build_audit_record
 from .audit_runtime import get_audit_sink
 from .blast_radius import build_blast_radius
@@ -89,6 +90,12 @@ class GitHubDeliveryRequest(BaseModel):
     body: str = Field(min_length=1, max_length=16_000)
     changes: list[GitHubFileChangeRequest] = Field(min_length=1, max_length=32)
     allow_write: bool = False
+
+
+class JobApprovalRequest(BaseModel):
+    job_id: str = Field(min_length=1, max_length=256)
+    approved_by: str = Field(min_length=1, max_length=256)
+    approved_at: datetime | None = None
 
 
 class JobClaimRequest(BaseModel):
@@ -194,6 +201,37 @@ def create_job(request: RemediationJobRequest) -> RemediationJob:
         raise HTTPException(status_code=503, detail="job queue is unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/remediation/jobs/approve", response_model=RemediationJob)
+def approve_job(request: JobApprovalRequest) -> RemediationJob:
+    try:
+        queue = get_job_queue()
+        job = queue.get(job_id=request.job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="remediation job not found")
+        released, approval = approve_remediation(job, approved_by=request.approved_by, approved_at=request.approved_at)
+        queue.release_approval(job=released)
+        get_audit_sink().append_event(
+            build_audit_event(
+                released,
+                audit_event_id=str(uuid4()),
+                event_type="job_approved",
+                from_status=job.status,
+                to_status=released.status,
+                metadata={
+                    "approved_by": approval.approved_by,
+                    "approved_at": approval.approved_at.isoformat(),
+                },
+            )
+        )
+        return released
+    except HTTPException:
+        raise
+    except (ApprovalError, JobQueueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuditError as exc:
+        raise HTTPException(status_code=503, detail="audit persistence is unavailable") from exc
 
 
 @app.post("/v1/remediation/jobs/events")
