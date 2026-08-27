@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import RemediationJob
 from .orchestrator import RemediationStatus
@@ -52,6 +52,6 @@ def approve_remediation(
         organization_id=job.organization_id,
         installation_id=job.installation_id,
         approved_by=approved_by,
-        approved_at=approved_at or datetime.now(timezone.utc),
+        approved_at=approved_at or datetime.now(UTC),
     )
     return job.model_copy(update={"status": RemediationStatus.QUEUED.value}), approval
