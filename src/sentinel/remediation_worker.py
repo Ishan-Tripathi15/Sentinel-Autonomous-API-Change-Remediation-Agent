@@ -30,7 +30,16 @@ class RemediationWorker:
     customer code and never performs repository writes itself.
     """
 
-    def __init__(self, queue: PostgresJobQueue, audit: AuditSink, *, worker_id: str, prepare: StageHandler, generate_patch: StageHandler, verify: StageHandler) -> None:
+    def __init__(
+        self,
+        queue: PostgresJobQueue,
+        audit: AuditSink,
+        *,
+        worker_id: str,
+        prepare: StageHandler,
+        generate_patch: StageHandler,
+        verify: StageHandler,
+    ) -> None:
         if not worker_id.strip():
             raise RemediationWorkerError("worker_id is required")
         self._queue = queue
@@ -48,40 +57,142 @@ class RemediationWorker:
             raise RemediationWorkerError(str(exc)) from exc
         if job is None:
             return None
+
         original = job
+        current = job.model_copy(
+            update={
+                "status": (
+                    RemediationStatus.QUEUED.value
+                    if job.status == "running"
+                    else job.status
+                )
+            }
+        )
         try:
-            self._emit(original, "job_claimed", from_status="queued", to_status="running")
-            current = original.model_copy(update={"status": RemediationStatus.QUEUED.value})
-            current = self._run_stage(current, RemediationStatus.READY_FOR_REMEDIATION, self._prepare)
-            current = self._run_stage(current, RemediationStatus.PATCH_GENERATED, self._generate_patch)
-            current = self._run_stage(current, RemediationStatus.VERIFICATION_PENDING, lambda value: value)
-            current = self._run_stage(current, RemediationStatus.VERIFIED, self._verify)
-            current = transition_job(current, RemediationStatus.DRY_RUN_COMPLETE)
-            self._emit(current, "job_completed", from_status="verified", to_status=current.status)
-            self._queue.complete(job_id=current.job_id, worker_id=self._worker_id, payload=current)
+            self._emit(
+                original,
+                "job_claimed",
+                from_status=original.status,
+                to_status="running",
+            )
+            current = self._resume(current)
+            if current.status == RemediationStatus.VERIFIED.value:
+                current = transition_job(current, RemediationStatus.DRY_RUN_COMPLETE)
+                self._queue.checkpoint(
+                    job_id=current.job_id,
+                    worker_id=self._worker_id,
+                    payload=current,
+                )
+            self._emit(
+                current,
+                "job_completed",
+                from_status="verified",
+                to_status=current.status,
+            )
+            self._queue.complete(
+                job_id=current.job_id,
+                worker_id=self._worker_id,
+                payload=current,
+            )
             return RemediationWorkerResult(job=current, completed=True)
         except Exception as exc:  # noqa: BLE001 - worker boundary must requeue every stage failure safely
-            failed = original.model_copy(update={"status": RemediationStatus.FAILED.value})
+            failed = current.model_copy(update={"status": RemediationStatus.FAILED.value})
             retry_payload = failed.model_copy(update={"status": RemediationStatus.QUEUED.value})
             try:
-                self._emit(failed, "job_failed", from_status="running", to_status=failed.status, metadata={"error_type": type(exc).__name__})
-                self._queue.fail(job_id=failed.job_id, worker_id=self._worker_id, payload=retry_payload)
+                self._emit(
+                    failed,
+                    "job_failed",
+                    from_status=current.status,
+                    to_status=failed.status,
+                    metadata={"error_type": type(exc).__name__},
+                )
+                self._queue.fail(
+                    job_id=failed.job_id,
+                    worker_id=self._worker_id,
+                    payload=retry_payload,
+                )
             except Exception as cleanup_exc:
-                raise RemediationWorkerError("worker failed and could not persist failure state") from cleanup_exc
+                raise RemediationWorkerError(
+                    "worker failed and could not persist failure state"
+                ) from cleanup_exc
             return RemediationWorkerResult(job=failed, completed=False)
 
-    def _run_stage(self, job: RemediationJob, target: RemediationStatus, handler: StageHandler) -> RemediationJob:
+    def _resume(self, job: RemediationJob) -> RemediationJob:
+        """Continue from the last stage persisted in the durable payload."""
+        current = job
+        if current.status == RemediationStatus.QUEUED.value:
+            current = self._run_stage(
+                current,
+                RemediationStatus.READY_FOR_REMEDIATION,
+                self._prepare,
+            )
+        if current.status == RemediationStatus.READY_FOR_REMEDIATION.value:
+            current = self._run_stage(
+                current,
+                RemediationStatus.PATCH_GENERATED,
+                self._generate_patch,
+            )
+        if current.status == RemediationStatus.PATCH_GENERATED.value:
+            current = self._run_stage(
+                current,
+                RemediationStatus.VERIFICATION_PENDING,
+                lambda value: value,
+            )
+        if current.status == RemediationStatus.VERIFICATION_PENDING.value:
+            current = self._run_stage(
+                current,
+                RemediationStatus.VERIFIED,
+                self._verify,
+            )
+        if current.status not in {
+            RemediationStatus.VERIFIED.value,
+            RemediationStatus.DRY_RUN_COMPLETE.value,
+        }:
+            raise RemediationWorkerError(f"unsupported checkpoint status: {current.status}")
+        return current
+
+    def _run_stage(
+        self,
+        job: RemediationJob,
+        target: RemediationStatus,
+        handler: StageHandler,
+    ) -> RemediationJob:
         self._emit(job, "stage_started", from_status=job.status, to_status=target.value)
         staged = transition_job(job, target)
         updated = handler(staged)
         if updated.job_id != job.job_id:
             raise RemediationWorkerError("stage changed job identity")
-        if updated.organization_id != job.organization_id or updated.installation_id != job.installation_id:
+        if (
+            updated.organization_id != job.organization_id
+            or updated.installation_id != job.installation_id
+        ):
             raise RemediationWorkerError("stage changed job tenant identity")
         if updated.status != target.value:
             raise RemediationWorkerError("stage handler changed workflow status unexpectedly")
+        self._queue.checkpoint(
+            job_id=updated.job_id,
+            worker_id=self._worker_id,
+            payload=updated,
+        )
         self._emit(updated, "stage_completed", from_status=job.status, to_status=updated.status)
         return updated
 
-    def _emit(self, job: RemediationJob, event_type: str, *, from_status: str | None = None, to_status: str | None = None, metadata: dict[str, object] | None = None) -> None:
-        self._audit.append_event(build_audit_event(job, audit_event_id=str(uuid4()), event_type=event_type, from_status=from_status, to_status=to_status, metadata=metadata))
+    def _emit(
+        self,
+        job: RemediationJob,
+        event_type: str,
+        *,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self._audit.append_event(
+            build_audit_event(
+                job,
+                audit_event_id=str(uuid4()),
+                event_type=event_type,
+                from_status=from_status,
+                to_status=to_status,
+                metadata=metadata,
+            )
+        )
