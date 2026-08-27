@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from sentinel.delivery_idempotency import DeliveryAttempt
-from sentinel.delivery_reconciliation import (
-    DeliveryReconciler,
-    RemoteDelivery,
-)
+from sentinel.delivery_reconciliation import DeliveryReconciler, RemoteDelivery
 
 
 def attempt(status: str = "in_progress") -> DeliveryAttempt:
@@ -23,7 +20,6 @@ def test_reconciler_does_not_call_provider_for_terminal_attempt() -> None:
 
         def find_delivery(self, **_kwargs):
             self.called = True
-            return None
 
     provider = Provider()
     result = DeliveryReconciler(provider).reconcile(
