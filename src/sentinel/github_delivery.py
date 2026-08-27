@@ -133,7 +133,7 @@ class GitHubDeliveryClient:
         allow_write: bool,
     ) -> GitHubPullRequest:
         """Create a branch and PR only after all write gates have passed."""
-        self._validate_request(
+        self.validate_request(
             job,
             repository=repository,
             base_branch=base_branch,
@@ -214,7 +214,7 @@ class GitHubDeliveryClient:
         )
 
     @staticmethod
-    def _validate_request(
+    def validate_request(
         job: RemediationJob,
         *,
         repository: str,
