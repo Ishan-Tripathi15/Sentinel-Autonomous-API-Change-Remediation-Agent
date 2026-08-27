@@ -5,7 +5,7 @@ import os
 import psycopg
 import pytest
 
-from sentinel.job_queue import JobQueueError, PostgresJobQueue
+from sentinel.job_queue import PostgresJobQueue
 from sentinel.migrate import migrate
 from sentinel.models import RemediationJob
 
