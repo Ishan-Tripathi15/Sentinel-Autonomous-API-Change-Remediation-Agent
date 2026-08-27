@@ -10,6 +10,8 @@ import httpx
 from sentinel.models import RemediationJob
 from sentinel.orchestrator import RemediationStatus
 
+from .delivery_reconciliation import RemoteDelivery
+
 _MAX_FILES = 32
 _MAX_FILE_CHARS = 64_000
 _MAX_REPOSITORY_CHARS = 256
@@ -77,6 +79,48 @@ class GitHubDeliveryClient:
     def __exit__(self, *_args: object) -> None:
         self.close()
 
+    def find_delivery(
+        self, *, repository: str, branch_name: str, base_branch: str
+    ) -> RemoteDelivery | None:
+        """Find an existing open PR for the deterministic Sentinel branch."""
+        if not _REPOSITORY_RE.fullmatch(repository):
+            raise GitHubDeliveryError("repository must be an owner/name pair")
+        if not _valid_branch(branch_name) or not _valid_branch(base_branch):
+            raise GitHubDeliveryError("delivery branch is invalid")
+        owner, repo = repository.split("/", 1)
+        head = quote(f"{owner}:{branch_name}", safe="")
+        base = quote(base_branch, safe="")
+        payload = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/pulls?state=open&head={head}&base={base}&per_page=10",
+        )
+        pull_requests = payload.get("items")
+        if not isinstance(pull_requests, list):
+            raise GitHubDeliveryError("GitHub returned an invalid pull request list")
+        for pull in pull_requests:
+            if not isinstance(pull, dict):
+                continue
+            number = pull.get("number")
+            url = pull.get("html_url")
+            head_data = pull.get("head")
+            head_ref = head_data.get("ref") if isinstance(head_data, dict) else None
+            commit_sha = head_data.get("sha") if isinstance(head_data, dict) else None
+            if (
+                isinstance(number, int)
+                and isinstance(url, str)
+                and isinstance(head_ref, str)
+                and isinstance(commit_sha, str)
+                and head_ref == branch_name
+                and commit_sha
+            ):
+                return RemoteDelivery(
+                    pull_request_number=number,
+                    pull_request_url=url,
+                    branch_name=head_ref,
+                    commit_sha=commit_sha,
+                )
+        return None
+
     def deliver(
         self,
         job: RemediationJob,
@@ -89,7 +133,7 @@ class GitHubDeliveryClient:
         allow_write: bool,
     ) -> GitHubPullRequest:
         """Create a branch and PR only after all write gates have passed."""
-        self._validate_request(
+        self.validate_request(
             job,
             repository=repository,
             base_branch=base_branch,
@@ -170,7 +214,7 @@ class GitHubDeliveryClient:
         )
 
     @staticmethod
-    def _validate_request(
+    def validate_request(
         job: RemediationJob,
         *,
         repository: str,
@@ -218,6 +262,8 @@ class GitHubDeliveryClient:
             payload = response.json()
         except ValueError as exc:
             raise GitHubDeliveryError("GitHub API returned invalid JSON") from exc
+        if isinstance(payload, list):
+            return {"items": payload}
         if not isinstance(payload, dict):
             raise GitHubDeliveryError("GitHub API returned an invalid response")
         return payload
